@@ -33,6 +33,10 @@ function routes(svc: SwarmService): [method: string, path: RegExp, handler: Rout
     ["GET", /^\/v1\/agents$/, () => svc.listAgents()],
     ["GET", /^\/v1\/agents\/([^/]+)\/inbox$/, (m) => svc.inbox(decodeURIComponent(m[1]!))],
     ["POST", /^\/v1\/reports$/, async (_, req) => svc.submitReport(await jsonBody(req))],
+    ["GET", /^\/v1\/topics$/, () => svc.listTopics()],
+    ["POST", /^\/v1\/topics\/([^/]+)\/subscribe$/, async (m, req) => svc.subscribe(decodeURIComponent(m[1]!), await jsonBody(req))],
+    ["POST", /^\/v1\/topics\/([^/]+)\/unsubscribe$/, async (m, req) => svc.unsubscribe(decodeURIComponent(m[1]!), await jsonBody(req))],
+    ["POST", /^\/v1\/topics\/([^/]+)\/publish$/, async (m, req) => svc.publish(decodeURIComponent(m[1]!), await jsonBody(req))],
   ];
 }
 

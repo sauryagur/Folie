@@ -1,5 +1,5 @@
 // Persistence ports. The service and controller depend on these, never on SQL.
-import type { AgentInfo, Message, Outcome, Report, WorkItem, WorkItemState } from "../shared/types";
+import type { AgentInfo, Message, Outcome, Report, TopicInfo, WorkItem, WorkItemState } from "../shared/types";
 
 export interface MessageRepo {
   send(m: { from: string; to: string; body: string; workItemId?: number }): Promise<Message>;
@@ -33,11 +33,22 @@ export interface ReportRepo {
   record(r: { agent: string; startedAt: string; outcome: Outcome; summary: string; messageIds: number[] }): Promise<Report>;
 }
 
+export interface TopicRepo {
+  /** Idempotent. The agent must exist. Subscriptions outlive suspension and retirement: delivery is durable, not live. */
+  subscribe(topic: string, agent: string): Promise<void>;
+  unsubscribe(topic: string, agent: string): Promise<void>;
+  /** Copies the message into the inbox of every subscriber except `from`; returns the copies. */
+  publish(topic: string, from: string, body: string): Promise<Message[]>;
+  /** Topics that have at least one subscriber. */
+  list(): Promise<TopicInfo[]>;
+}
+
 export interface Repos {
   messages: MessageRepo;
   workItems: WorkItemRepo;
   agents: AgentRepo;
   reports: ReportRepo;
+  topics: TopicRepo;
 }
 
 export interface Store extends Repos {

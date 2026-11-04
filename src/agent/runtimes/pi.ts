@@ -9,6 +9,9 @@ import type { FolieClient } from "../../shared/client";
 import type { Message } from "../../shared/types";
 import type { Runtime, SessionResult } from "../runtime";
 
+/** The slice of folie-server the swarm tools call. */
+export type SwarmServer = Pick<FolieClient, "send" | "subscribe" | "unsubscribe" | "publish">;
+
 export interface PiRuntimeDeps {
   agentName: string;
   model: Model<Api>;
@@ -17,17 +20,18 @@ export interface PiRuntimeDeps {
   codingTools: AgentTool[];
   /** Where the conversation survives ax suspend/resume (must live under /workspace). */
   stateFile: string;
-  server: Pick<FolieClient, "send">;
+  server: SwarmServer;
 }
 
 const SYSTEM_PROMPT = (name: string) =>
   `You are ${name}, an autonomous coding agent in a swarm. You receive goals and delegated work as messages. ` +
   "Do the work with your tools. To hand work to a peer, call message_send; that wakes them. " +
+  "Topics are broadcast channels: topic_subscribe to receive what is published there (even while you are suspended), topic_publish to tell every subscriber. " +
   "When finished, or when you cannot proceed, call report_submit exactly once with the outcome and a summary of what happened.";
 
 const formatInbox = (messages: Message[]) =>
   `You have ${messages.length} unread message(s):\n\n` +
-  messages.map((m) => `[#${m.id} from ${m.from}]\n${m.body}`).join("\n\n");
+  messages.map((m) => `[#${m.id} from ${m.from}${m.topic ? ` on topic ${m.topic}` : ""}]\n${m.body}`).join("\n\n");
 
 async function loadConversation(file: string): Promise<AgentMessage[]> {
   try {
@@ -56,6 +60,36 @@ export class PiRuntime implements Runtime {
         execute: async (_id, p) => {
           const m = await this.d.server.send({ from: this.d.agentName, to: p.to, body: p.body });
           return { content: [{ type: "text", text: `sent message #${m.id} to ${p.to}` }], details: {} };
+        },
+      }),
+      swarmTool({
+        name: "topic_subscribe",
+        label: "Subscribe to topic",
+        description: "Subscribe to a topic. Messages published there arrive in your inbox from now on, and wake you.",
+        parameters: Type.Object({ topic: Type.String() }),
+        execute: async (_id, p) => {
+          await this.d.server.subscribe(p.topic, { agent: this.d.agentName });
+          return { content: [{ type: "text", text: `subscribed to ${p.topic}` }], details: {} };
+        },
+      }),
+      swarmTool({
+        name: "topic_unsubscribe",
+        label: "Unsubscribe from topic",
+        description: "Stop receiving messages published to a topic.",
+        parameters: Type.Object({ topic: Type.String() }),
+        execute: async (_id, p) => {
+          await this.d.server.unsubscribe(p.topic, { agent: this.d.agentName });
+          return { content: [{ type: "text", text: `unsubscribed from ${p.topic}` }], details: {} };
+        },
+      }),
+      swarmTool({
+        name: "topic_publish",
+        label: "Publish to topic",
+        description: "Publish a message to every current subscriber of a topic except yourself. Each wakes if idle.",
+        parameters: Type.Object({ topic: Type.String(), body: Type.String() }),
+        execute: async (_id, p) => {
+          const { delivered } = await this.d.server.publish(p.topic, { from: this.d.agentName, body: p.body });
+          return { content: [{ type: "text", text: `delivered to ${delivered} subscriber(s) of ${p.topic}` }], details: {} };
         },
       }),
       swarmTool({

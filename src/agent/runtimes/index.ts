@@ -1,5 +1,5 @@
 // Runtime selection from the environment. Heavy pi imports load only when pi is chosen.
-import type { FolieClient } from "../../shared/client";
+import type { SwarmServer } from "./pi";
 import type { Runtime } from "../runtime";
 import { echoRuntime } from "./echo";
 
@@ -11,7 +11,7 @@ export interface RuntimeEnv {
   workdir: string;
 }
 
-export async function createRuntime(env: RuntimeEnv, server: Pick<FolieClient, "send">): Promise<Runtime> {
+export async function createRuntime(env: RuntimeEnv, server: SwarmServer): Promise<Runtime> {
   if (env.runtime === "echo") return echoRuntime;
   if (env.runtime !== "pi") throw new Error(`unknown FOLIE_RUNTIME ${JSON.stringify(env.runtime)} (pi|echo)`);
 

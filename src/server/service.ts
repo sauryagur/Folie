@@ -1,7 +1,12 @@
 // The swarm's business rules. Every wake, delegation and report passes through here.
 import {
   AGENT_NAME,
+  TOPIC_NAME,
   type AgentInfo,
+  type PublishRequest,
+  type PublishResult,
+  type SubscribeRequest,
+  type TopicInfo,
   type Message,
   type Report,
   type SendMessageRequest,
@@ -21,6 +26,11 @@ function agentName(v: unknown, field: string): string {
 
 function text(v: unknown, field: string): string {
   if (typeof v !== "string" || v.trim() === "") throw new ValidationError(`${field}: required`);
+  return v;
+}
+
+function topicName(v: unknown): string {
+  if (typeof v !== "string" || !TOPIC_NAME.test(v)) throw new ValidationError("topic: invalid topic name");
   return v;
 }
 
@@ -82,6 +92,36 @@ export class SwarmService {
 
   listAgents(): Promise<AgentInfo[]> {
     return this.store.agents.list();
+  }
+
+  /** An agent that subscribes gets created if unknown, so it can be subscribed before it ever runs. */
+  async subscribe(topic: string, req: SubscribeRequest): Promise<{ topic: string; agent: string }> {
+    const t = topicName(topic);
+    const agent = agentName(req.agent, "agent");
+    await this.store.transaction(async (r) => {
+      await r.agents.touch(agent);
+      await r.topics.subscribe(t, agent);
+    });
+    return { topic: t, agent };
+  }
+
+  async unsubscribe(topic: string, req: SubscribeRequest): Promise<{ topic: string; agent: string }> {
+    const t = topicName(topic);
+    const agent = agentName(req.agent, "agent");
+    await this.store.topics.unsubscribe(t, agent);
+    return { topic: t, agent };
+  }
+
+  /** Delivers a copy to every current subscriber except the publisher; each copy wakes its agent like any mail. */
+  async publish(topic: string, req: PublishRequest): Promise<PublishResult> {
+    const t = topicName(topic);
+    const from = text(req.from, "from");
+    const body = text(req.body, "body");
+    return { delivered: (await this.store.topics.publish(t, from, body)).length };
+  }
+
+  listTopics(): Promise<TopicInfo[]> {
+    return this.store.topics.list();
   }
 
   /** Records the session, acks what it consumed, and settles the work items behind those messages. */

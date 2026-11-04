@@ -1,6 +1,6 @@
-import type { AgentInfo, Message, Report, WorkItem, WorkItemState } from "../shared/types";
+import type { AgentInfo, Message, Report, TopicInfo, WorkItem, WorkItemState } from "../shared/types";
 import type { Database, Queryable, Row } from "./db";
-import type { AgentRepo, MessageRepo, Repos, ReportRepo, Store, WorkItemRepo } from "./store";
+import type { AgentRepo, MessageRepo, Repos, ReportRepo, Store, TopicRepo, WorkItemRepo } from "./store";
 
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
 
@@ -10,6 +10,7 @@ const toMessage = (r: Row): Message => ({
   to: r.recipient as string,
   body: r.body as string,
   workItemId: (r.work_item_id as number | null) ?? null,
+  topic: (r.topic as string | null) ?? null,
   createdAt: iso(r.created_at),
   ackedAt: r.acked_at ? iso(r.acked_at) : null,
 });
@@ -30,7 +31,7 @@ const toReport = (r: Row): Report => ({
   createdAt: iso(r.created_at),
 });
 
-const MESSAGE_COLS = "id, sender, recipient, body, work_item_id, created_at, acked_at";
+const MESSAGE_COLS = "id, sender, recipient, body, work_item_id, topic, created_at, acked_at";
 
 const messages = (q: Queryable): MessageRepo => ({
   async send({ from, to, body, workItemId }) {
@@ -146,11 +147,42 @@ const reports = (q: Queryable): ReportRepo => ({
   },
 });
 
+const topics = (q: Queryable): TopicRepo => ({
+  async subscribe(topic, agent) {
+    await q.query("INSERT INTO topic_subscriptions (topic, agent) VALUES ($1,$2) ON CONFLICT DO NOTHING", [topic, agent]);
+  },
+  async unsubscribe(topic, agent) {
+    await q.query("DELETE FROM topic_subscriptions WHERE topic = $1 AND agent = $2", [topic, agent]);
+  },
+  async publish(topic, from, body) {
+    // One statement fans out to every subscriber but the publisher, and counts the mail as their activity.
+    const { rows } = await q.query(
+      `WITH sent AS (
+         INSERT INTO messages (sender, recipient, body, topic)
+         SELECT $2::text, s.agent, $3::text, $1::text FROM topic_subscriptions s WHERE s.topic = $1::text AND s.agent <> $2::text
+         RETURNING ${MESSAGE_COLS}
+       ), touched AS (
+         UPDATE agents SET last_active_at = now() WHERE name IN (SELECT recipient FROM sent)
+       )
+       SELECT * FROM sent ORDER BY id`,
+      [topic, from, body],
+    );
+    return rows.map(toMessage);
+  },
+  async list() {
+    const { rows } = await q.query(
+      "SELECT topic, array_agg(agent ORDER BY agent) AS subscribers FROM topic_subscriptions GROUP BY topic ORDER BY topic",
+    );
+    return rows.map((r): TopicInfo => ({ topic: r.topic as string, subscribers: r.subscribers as string[] }));
+  },
+});
+
 const bind = (q: Queryable): Repos => ({
   messages: messages(q),
   workItems: workItems(q),
   agents: agents(q),
   reports: reports(q),
+  topics: topics(q),
 });
 
 export function pgStore(db: Database): Store {

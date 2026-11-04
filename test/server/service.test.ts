@@ -196,3 +196,55 @@ describe("workItem", () => {
     expect(await svc.workItem(workItem.id)).toMatchObject({ workItem: { state: "assigned" }, report: null });
   });
 });
+
+describe("topics", () => {
+  it("subscribing creates an agent that has never run, so it can be wired up before it exists", async () => {
+    expect(await svc.subscribe("news", { agent: "newcomer" })).toEqual({ topic: "news", agent: "newcomer" });
+    expect((await svc.listAgents()).map((a) => a.name)).toEqual(["newcomer"]);
+    expect(await svc.listTopics()).toEqual([{ topic: "news", subscribers: ["newcomer"] }]);
+  });
+
+  it("publish puts a copy in each subscriber's inbox, naming the topic and the sender", async () => {
+    await svc.subscribe("news", { agent: "a" });
+    await svc.subscribe("news", { agent: "b" });
+
+    expect(await svc.publish("news", { from: "human", body: "ship it" })).toEqual({ delivered: 2 });
+
+    for (const who of ["a", "b"]) {
+      expect(await svc.inbox(who)).toMatchObject([{ from: "human", topic: "news", body: "ship it", workItemId: null }]);
+    }
+  });
+
+  it("an agent publishing does not wake itself", async () => {
+    await svc.subscribe("news", { agent: "a" });
+    await svc.subscribe("news", { agent: "b" });
+    expect(await svc.publish("news", { from: "a", body: "x" })).toEqual({ delivered: 1 });
+    expect(await svc.inbox("a")).toEqual([]);
+  });
+
+  it("topic mail is acked by the same report as any other mail, and touches no work item", async () => {
+    await svc.subscribe("news", { agent: "a" });
+    await svc.publish("news", { from: "human", body: "x" });
+    const [m] = await svc.inbox("a");
+    await report("a", [m!.id]);
+    expect(await svc.inbox("a")).toEqual([]);
+  });
+
+  it("unsubscribe stops delivery", async () => {
+    await svc.subscribe("news", { agent: "a" });
+    await svc.unsubscribe("news", { agent: "a" });
+    expect(await svc.publish("news", { from: "human", body: "x" })).toEqual({ delivered: 0 });
+  });
+
+  it.each(["Bad Topic", "-lead", "", "x".repeat(70)])("rejects topic name %j", async (topic) => {
+    await expect(svc.subscribe(topic, { agent: "a" })).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.publish(topic, { from: "a", body: "x" })).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("rejects a bad agent, an empty body and an empty sender", async () => {
+    await expect(svc.subscribe("news", { agent: "Bad!" })).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.publish("news", { from: "a", body: " " })).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.publish("news", { from: "", body: "x" })).rejects.toBeInstanceOf(ValidationError);
+    expect(await svc.listAgents()).toEqual([]);
+  });
+});

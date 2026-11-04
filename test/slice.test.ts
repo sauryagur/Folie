@@ -122,6 +122,50 @@ it("emergence: an agent delegating by message wakes a peer that did not exist", 
   expect(await client.inbox("worker")).toEqual([]);
 });
 
+it("a topic publish wakes subscribers that have never run, and reaches them again after they are suspended", async () => {
+  await client.subscribe("alerts", { agent: "watch-1" });
+  await client.subscribe("alerts", { agent: "watch-2" });
+  expect(ax.tasks.size).toBe(0); // subscribing alone wakes nobody
+
+  expect(await client.publish("alerts", { from: "human", body: "disk full" })).toEqual({ delivered: 2 });
+  await tick();
+  expect([...ax.tasks.keys()].sort()).toEqual(["folie/watch-1", "folie/watch-2"]);
+  await runAgents(() => echoRuntime);
+  expect(await client.inbox("watch-1")).toEqual([]);
+  expect(await client.inbox("watch-2")).toEqual([]);
+
+  // Delivery is durable, not live: a suspended subscriber gets the next publish and wakes with it.
+  await age("watch-1", 120);
+  await tick();
+  expect(ax.tasks.get("folie/watch-1")!.phase).toBe("Suspended");
+  const task = ax.tasks.get("folie/watch-1");
+  await client.publish("alerts", { from: "human", body: "disk still full" });
+  await tick();
+  expect(ax.tasks.get("folie/watch-1")).toBe(task);
+  expect(ax.tasks.get("folie/watch-1")!.phase).toBe("Running");
+  expect(await client.inbox("watch-1")).toMatchObject([{ topic: "alerts", body: "disk still full" }]);
+});
+
+it("an agent publishing from a session wakes the other subscribers, not itself", async () => {
+  await client.subscribe("alerts", { agent: "lead" });
+  await client.subscribe("alerts", { agent: "worker" });
+  await client.submitGoal({ goal: "announce", to: "lead" });
+  const announcing: Runtime = {
+    run: async () => {
+      await client.publish("alerts", { from: "lead", body: "heads up" });
+      return { outcome: "done", summary: "announced" };
+    },
+  };
+
+  await tick();
+  await runAgents((name) => (name === "lead" ? announcing : echoRuntime));
+  expect(await client.inbox("lead")).toEqual([]);
+
+  await tick();
+  expect([...ax.tasks.keys()].sort()).toEqual(["folie/lead", "folie/worker"]);
+  expect(await client.inbox("worker")).toMatchObject([{ from: "lead", topic: "alerts", body: "heads up" }]);
+});
+
 it("a failing session parks the work item as blocked and is not retried", async () => {
   const { workItem } = await client.submitGoal({ goal: "impossible" });
   await tick();

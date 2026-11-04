@@ -16,18 +16,20 @@ import { PiRuntime } from "../../src/agent/runtimes/pi";
 import type { Message } from "../../src/shared/types";
 
 const inbox: Message[] = [
-  { id: 7, from: "human", to: "a", body: "write hello.txt", workItemId: 1, createdAt: "", ackedAt: null },
+  { id: 7, from: "human", to: "a", body: "write hello.txt", workItemId: 1, topic: null, createdAt: "", ackedAt: null },
 ];
 
 let dir: string;
 let faux: FauxProviderHandle;
 let sent: { from: string; to: string; body: string }[];
+let topicCalls: string[];
 let seenContexts: { role: string; content: unknown }[][];
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "folie-pi-"));
   faux = fauxProvider();
   sent = [];
+  topicCalls = [];
   seenContexts = [];
 });
 afterEach(() => rm(dir, { recursive: true, force: true }));
@@ -46,7 +48,12 @@ function runtime() {
     streamFn,
     codingTools: [],
     stateFile: join(dir, ".folie", "conversation.json"),
-    server: { send: async (r) => (sent.push(r), { id: 99, ...r, workItemId: null, createdAt: "", ackedAt: null }) },
+    server: {
+      send: async (r) => (sent.push(r), { id: 99, ...r, workItemId: null, topic: null, createdAt: "", ackedAt: null }),
+      subscribe: async (topic, r) => (topicCalls.push(`subscribe ${r.agent} ${topic}`), { topic, agent: r.agent }),
+      unsubscribe: async (topic, r) => (topicCalls.push(`unsubscribe ${r.agent} ${topic}`), { topic, agent: r.agent }),
+      publish: async (topic, r) => (topicCalls.push(`publish ${r.from} ${topic}: ${r.body}`), { delivered: 3 }),
+    },
   });
 }
 
@@ -71,6 +78,23 @@ describe("PiRuntime", () => {
     ]);
     await runtime().run(inbox);
     expect(sent).toEqual([{ from: "a", to: "bob", body: "please review" }]);
+  });
+
+  it("subscribes, publishes and unsubscribes as this agent", async () => {
+    faux.setResponses([
+      toolTurn("topic_subscribe", { topic: "releases" }),
+      toolTurn("topic_publish", { topic: "releases", body: "v2 is out" }),
+      toolTurn("topic_unsubscribe", { topic: "releases" }),
+      toolTurn("report_submit", { outcome: "done", summary: "announced" }),
+    ]);
+    expect(await runtime().run(inbox)).toEqual({ outcome: "done", summary: "announced" });
+    expect(topicCalls).toEqual(["subscribe a releases", "publish a releases: v2 is out", "unsubscribe a releases"]);
+  });
+
+  it("tells the model which topic a message arrived on", async () => {
+    faux.setResponses([toolTurn("report_submit", { outcome: "done", summary: "s" })]);
+    await runtime().run([{ ...inbox[0]!, id: 9, from: "bob", body: "release cut", topic: "releases", workItemId: null }]);
+    expect(JSON.stringify(seenContexts[0])).toContain("#9 from bob on topic releases");
   });
 
   it("falls back to the model's final text when it never calls report_submit", async () => {

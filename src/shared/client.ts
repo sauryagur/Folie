@@ -2,10 +2,14 @@
 import type {
   AgentInfo,
   Message,
+  PublishRequest,
+  PublishResult,
   Report,
   SendMessageRequest,
   SubmitGoalRequest,
   SubmitReportRequest,
+  SubscribeRequest,
+  TopicInfo,
   WorkItem,
   WorkItemView,
 } from "./types";
@@ -44,5 +48,17 @@ export class FolieClient {
   }
   report(r: SubmitReportRequest) {
     return this.req<Report>("POST", "/v1/reports", r);
+  }
+  topics() {
+    return this.req<TopicInfo[]>("GET", "/v1/topics");
+  }
+  subscribe(topic: string, r: SubscribeRequest) {
+    return this.req<{ topic: string; agent: string }>("POST", `/v1/topics/${encodeURIComponent(topic)}/subscribe`, r);
+  }
+  unsubscribe(topic: string, r: SubscribeRequest) {
+    return this.req<{ topic: string; agent: string }>("POST", `/v1/topics/${encodeURIComponent(topic)}/unsubscribe`, r);
+  }
+  publish(topic: string, r: PublishRequest) {
+    return this.req<PublishResult>("POST", `/v1/topics/${encodeURIComponent(topic)}/publish`, r);
   }
 }

@@ -27,6 +27,13 @@ CREATE TABLE IF NOT EXISTS messages (
   acked_at     timestamptz
 );
 CREATE INDEX IF NOT EXISTS messages_unacked ON messages (recipient, id) WHERE acked_at IS NULL;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS topic text;
+CREATE TABLE IF NOT EXISTS topic_subscriptions (
+  topic      text NOT NULL,
+  agent      text NOT NULL REFERENCES agents(name),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (topic, agent)
+);
 CREATE TABLE IF NOT EXISTS sessions (
   id          serial PRIMARY KEY,
   agent       text NOT NULL REFERENCES agents(name),

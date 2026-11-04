@@ -53,6 +53,23 @@ describe("API through the typed client", () => {
     expect(await client.inbox("b")).toEqual([m]);
   });
 
+  it("round-trips subscribe -> publish -> inbox -> topics -> unsubscribe", async () => {
+    await client.subscribe("releases", { agent: "a" });
+    await client.subscribe("releases", { agent: "b" });
+    expect(await client.topics()).toEqual([{ topic: "releases", subscribers: ["a", "b"] }]);
+
+    expect(await client.publish("releases", { from: "a", body: "v2" })).toEqual({ delivered: 1 });
+    expect(await client.inbox("b")).toMatchObject([{ topic: "releases", from: "a", body: "v2" }]);
+    expect(await client.inbox("a")).toEqual([]);
+
+    await client.unsubscribe("releases", { agent: "b" });
+    expect(await client.publish("releases", { from: "human", body: "again" })).toEqual({ delivered: 1 });
+  });
+
+  it("encodes topic names in the path and rejects malformed ones with 400", async () => {
+    await expect(client.publish("Bad Topic", { from: "a", body: "x" })).rejects.toThrow(/400 topic: invalid topic name/);
+  });
+
   it("surfaces server errors with status and message", async () => {
     await expect(client.submitGoal({ goal: "" })).rejects.toThrow(/400 goal: required/);
     await expect(client.workItem(404)).rejects.toThrow(/404 work item 404/);

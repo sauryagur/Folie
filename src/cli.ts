@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { agents, status, submit, type Api } from "./cli/commands";
+import { agents, publish, status, submit, subscribe, topics, unsubscribe, type Api } from "./cli/commands";
 import { down, up } from "./host/cluster";
 import { withServerUrl } from "./host/portforward";
 import { FolieClient } from "./shared/client";
@@ -16,6 +16,10 @@ const commands: Record<string, Command> = {
   submit: viaServer(submit),
   status: viaServer(status),
   agents: viaServer(agents),
+  topics: viaServer(topics),
+  subscribe: viaServer(subscribe),
+  unsubscribe: viaServer(unsubscribe),
+  publish: viaServer(publish),
 };
 
 const [name = "", ...args] = process.argv.slice(2);

@@ -5,7 +5,7 @@ import type { Message, SubmitReportRequest } from "../../src/shared/types";
 import { silent } from "../support/fakes";
 
 const msg = (id: number, body = "do it"): Message => ({
-  id, from: "human", to: "a", body, workItemId: null, createdAt: "", ackedAt: null,
+  id, from: "human", to: "a", body, workItemId: null, topic: null, createdAt: "", ackedAt: null,
 });
 
 class FakeServer implements AgentServer {

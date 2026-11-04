@@ -169,3 +169,82 @@ describe("transactions", () => {
     expect(await store.agents.list()).toEqual([]);
   });
 });
+
+describe("topics", () => {
+  async function subscribers(topic: string, names: string[]) {
+    for (const n of names) {
+      await store.agents.touch(n);
+      await store.topics.subscribe(topic, n);
+    }
+  }
+
+  it("publish copies the message to every subscriber except the publisher", async () => {
+    await subscribers("news", ["a", "b", "c"]);
+    const copies = await store.topics.publish("news", "a", "hello");
+
+    expect(copies.map((m) => m.to)).toEqual(["b", "c"]);
+    expect(copies[0]).toMatchObject({ from: "a", body: "hello", topic: "news", workItemId: null, ackedAt: null });
+    expect(await store.messages.unacked("a")).toEqual([]);
+    expect((await store.messages.unacked("b"))[0]).toMatchObject({ topic: "news", body: "hello" });
+    expect(await store.agents.withUnread()).toEqual(["b", "c"]);
+  });
+
+  it("a publisher that is not a subscriber reaches everyone", async () => {
+    await subscribers("news", ["a", "b"]);
+    expect((await store.topics.publish("news", "human", "x")).map((m) => m.to)).toEqual(["a", "b"]);
+  });
+
+  it("publishing to a topic nobody listens to delivers nothing and creates no mail", async () => {
+    await store.agents.touch("a");
+    expect(await store.topics.publish("empty", "a", "x")).toEqual([]);
+    expect(await store.agents.withUnread()).toEqual([]);
+  });
+
+  it("keeps topics separate", async () => {
+    await subscribers("one", ["a"]);
+    await subscribers("two", ["b"]);
+    await store.topics.publish("one", "human", "only for one");
+    expect(await store.agents.withUnread()).toEqual(["a"]);
+  });
+
+  it("subscribe is idempotent and unsubscribe stops delivery", async () => {
+    await subscribers("news", ["a"]);
+    await store.topics.subscribe("news", "a");
+    expect(await store.topics.publish("news", "human", "1")).toHaveLength(1);
+
+    await store.topics.unsubscribe("news", "a");
+    await store.topics.unsubscribe("news", "a");
+    expect(await store.topics.publish("news", "human", "2")).toEqual([]);
+  });
+
+  it("only delivers to subscribers present at publish time: nothing is replayed to late joiners", async () => {
+    await subscribers("news", ["early"]);
+    await store.topics.publish("news", "human", "before");
+    await subscribers("news", ["late"]);
+    expect(await store.messages.unacked("late")).toEqual([]);
+  });
+
+  it("counts delivered mail as activity for recipients", async () => {
+    await subscribers("news", ["b"]);
+    await store.agents.setState("b", "running");
+    await age("b", 3600);
+    const [copy] = await store.topics.publish("news", "human", "x");
+    await store.messages.ack("b", [copy!.id]);
+    expect(await store.agents.idle("running", 60)).toEqual([]);
+  });
+
+  it("lists topics with sorted subscribers; a topic with none disappears", async () => {
+    await subscribers("zeta", ["b", "a"]);
+    await subscribers("alpha", ["c"]);
+    expect(await store.topics.list()).toEqual([
+      { topic: "alpha", subscribers: ["c"] },
+      { topic: "zeta", subscribers: ["a", "b"] },
+    ]);
+    await store.topics.unsubscribe("alpha", "c");
+    expect((await store.topics.list()).map((t) => t.topic)).toEqual(["zeta"]);
+  });
+
+  it("refuses a subscription for an agent that does not exist", async () => {
+    await expect(store.topics.subscribe("news", "ghost")).rejects.toThrow();
+  });
+});

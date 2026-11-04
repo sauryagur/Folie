@@ -3,8 +3,13 @@ import { createRuntime } from "../../src/agent/runtimes";
 import type { Message } from "../../src/shared/types";
 
 const env = { agentName: "a", runtime: "echo", model: "anthropic/x", workdir: "/tmp" };
-const server = { send: async () => { throw new Error("unused"); } };
-const m = (id: number, from: string, body: string): Message => ({ id, from, to: "a", body, workItemId: null, createdAt: "", ackedAt: null });
+const server = {
+  send: async () => { throw new Error("unused"); },
+  subscribe: async () => { throw new Error("unused"); },
+  unsubscribe: async () => { throw new Error("unused"); },
+  publish: async () => { throw new Error("unused"); },
+};
+const m = (id: number, from: string, body: string): Message => ({ id, from, to: "a", body, workItemId: null, topic: null, createdAt: "", ackedAt: null });
 
 describe("createRuntime", () => {
   it("echo summarizes every message deterministically", async () => {
