@@ -8,6 +8,8 @@ Status: end-to-end slice works in the cluster (goal → inbox → controller wak
 
 A production work fleet: hundreds of agents (each an ax `Task` running the [pi](https://github.com/badlogic/pi-mono) harness), doing autonomous coding work — arbitrary goals, up to and including implementing a PRD end to end with verification — communicating through durable inboxes and pub/sub topics, and steerable in real time from a CLI and TUI.
 
+Folie is meant to replace the meta-harness: the thing you sit inside while agents work. `folie` with no arguments opens the operator TUI (below); the subcommands (`up`, `submit`, `status`, ...) are the scripting surface over the same HTTP API.
+
 The defining property is **emergence by construction**: the only thing that wakes an idle agent is a message arriving in its inbox. Human-submitted goals, controller assignments, and peer-to-peer delegation are all just messages, so any agent can wake any other agent. The TUI lets you watch it happen — fleet grid, live message stream, per-agent inbox and topic inspection.
 
 Non-goals for v1:
@@ -86,13 +88,14 @@ pi is the first runtime, not the only forever-runtime. The seam for others (e.g.
 
 ### folie CLI / TUI
 
-TypeScript, built on [OpenTUI](https://github.com/anomalyco/opentui) (`@opentui/core`: Zig-native renderer with flexbox layout, scroll boxes, selects, inputs; the library behind OpenCode). Chosen over `pi-tui` because the operator surface is a dense, mouse-and-keyboard grid plus a scrolling feed, and OpenTUI also offers `@opentui/ssh` for serving the same TUI to remote operators on a VPC. Cost: it requires Bun and ships a native core, so the `folie` CLI is Bun-only (it already is). Views are pure view-models (fleet rows, stream buffer) fed by the HTTP client, with OpenTUI only at the rendering edge, so the renderer stays swappable and the logic stays testable under Node. v1 surface, all of it:
+TypeScript, built on [OpenTUI](https://github.com/anomalyco/opentui) (`@opentui/core`: Zig-native renderer with flexbox layout, scroll boxes, selects, inputs; the library behind OpenCode). Chosen over `pi-tui` because the operator surface is a dense, mouse-and-keyboard grid plus a scrolling feed, and OpenTUI also offers `@opentui/ssh` for serving the same TUI to remote operators on a VPC. Cost: it requires Bun and ships a native core (so the `folie` CLI is Bun-only, as it already was), and it is pre-1.0 (0.8.x here). State and transitions are pure view-models (`src/tui/model.ts`, commands, poller) tested under Node; `src/tui/app.ts` is the only OpenTUI code and is tested with OpenTUI's in-memory renderer under Bun (`bun run test:tui`).
 
-- **Fleet grid** — every agent: state (running / idle / suspended / blocked), current session, inbox depth.
-- **Live message stream** — scrolling feed of all messages flowing through the substrate.
-- **Inspect** — per-agent inbox, per-topic traffic, session reports.
-- **Submit** — create a work item (lands as a message in an agent's inbox or a topic).
-- **Steer** — message an agent directly, suspend, resume, delete.
+**`folie` (no arguments) opens the TUI**, which polls folie-server about once a second (cursor-based, so it only fetches new messages; no push channel yet):
+
+- **Fleet grid** — every agent: state (`working`, `idle`, `waking`, `suspended`, `retired`), unread mail, time since last activity.
+- **Message stream** — every message in the swarm, newest at the bottom (view `1`).
+- **Inspect** — the selected agent's unread inbox (`2`), all topics and their subscribers (`3`), the selected agent's session reports (`4`).
+- **Submit and steer** — `:` opens a command line: `submit [@agent] <goal>`, `send [@agent] <text>`, `publish`, `subscribe`, `unsubscribe`, `suspend|resume|delete [agent]`. Shortcuts: `tab`/`1-4` views, `s` suspend, `r` resume, `q` quit. Delete, the kill switch, is command-only so it cannot be pressed by accident.
 
 ### `folie up` — bootstrap
 
@@ -219,9 +222,29 @@ All against the ax checkout at `~/Projects/FOSS/ax`:
 
 Pi facts: `pi-agent-core` (agent runtime SDK), `pi-durable` (durable conversation/task/document runtime), extensions/packages docs, Node ≥ 22.19, no built-in permission system (containerization is the boundary) — all from the `earendil-works/pi` monorepo README and package docs. (`pi-tui` was considered for the TUI and rejected; see [folie CLI / TUI](#folie-cli--tui).)
 
+## Lessons from pi's design
+
+Source: Mario Zechner, [What I learned building an opinionated and minimal coding agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/) (2025-11-30), written by the author of the harness Folie's agents run. What it confirms, and where it pushes on this design. Proposals, not decisions.
+
+**Already aligned.** Observability over magic (the message log, inbox, reports and TUI exist so nothing an agent does to the swarm is hidden; transcripts are the gap, below). YOLO inside a sandbox (his argument that permission prompts are theater once an agent can run code is Decision 6). Minimal prompt and tools (the pi runtime's system prompt is a short paragraph, plus five swarm tools beside pi's four coding tools). No built-in todos or plan mode: durable plans belong in files in `/workspace`, not in Folie state. Alternative UIs over a small, documented API (the HTTP API and `FolieClient`).
+
+**Where it pushes back.**
+
+1. **Parallel agents on one codebase.** He calls spawning several agents to implement features in parallel an anti-pattern that degrades the codebase unless you do not care about it. A swarm is exactly that, so the design owes an answer: Folie has no repo model at all today. Candidates: one branch or worktree per agent, merging only through a human or a dedicated reviewer agent; parallelism for independent repos and for review, not for concurrent edits to the same files.
+2. **Transcripts are invisible.** He wants to inspect every aspect of every interaction and objects to sub-agents as black boxes. Folie's agents are black boxes below the report: only a summary leaves the sandbox. Proposal: the agent streams session events (messages, tool calls, results) to folie-server, stored append-only, with a TUI transcript view for any agent.
+3. **No mid-session steering.** pi has a message queue so you can steer a working agent. In Folie, mail that arrives during a session waits until the report acks the batch. Proposal: the agent loop polls during a session and injects new mail through pi-agent-core's steering queue, and the report acks those messages too.
+4. **Unbounded conversations.** Agents resume one ever-growing conversation across goals, mixing unrelated work and eventually overflowing context. His rule is to carry context in artifacts and start fresh sessions. Proposal: a fresh session per work item, with memory in `/workspace` files, or compaction.
+5. **Cost is unseen.** pi tracks tokens and cost per message. Reports could carry usage so the TUI shows spend per agent without any enforcement, a step short of the gateway.
+6. **Hop-in.** He runs long work in tmux so a human can attach and co-debug. Setting `spec.debug: true` on agent tasks would allow `ax ssh` into any agent (blocked on this machine by pod-network routing).
+7. **Tool surface.** Every tool description is paid for in context on every session. The swarm operations could instead be the `folie` CLI called through bash, with a short README read on demand.
+
+**TUI style.** pi-tui chose scrollback-native rendering (like Claude Code and Codex) because a coding agent is a linear chat and the terminal already provides scrolling and search; a full-screen TUI gives that up. Folie's TUI is a full-screen dashboard because its primary object is a fleet, not one conversation. If the harness feeling matters more than the grid, a main-screen mode with a pinned fleet footer is the alternative. OpenTUI's test renderer exposes `screenMode` and `footerHeight` options, which suggests it supports this; not verified. The post also called OpenTUI not production-ready in late 2025; its docs now cite OpenCode in production, and it is still 0.x.
+
 ## Next steps
 
 1. ~~`folie up`~~ done: kind + Substrate + ax + Postgres + folie-server, idempotent.
 2. End-to-end slice: done and exercised in the cluster with the `echo` runtime, and with pi up to a real provider call (bogus key). Pi completing real coding work against a valid key is unexercised. Run `bun run test`.
 3. ~~Elastic pool~~ done (above). Conversation is persisted by Folie as `/workspace/.folie/conversation.json`, not yet via `pi-durable`. Not yet: backlog-aware scaling beyond one-goal-per-agent, scale-down hysteresis tuning, deleting retired agent rows.
-4. ~~Topics and peer delegation~~ done: `message_send`, `topic_subscribe`/`topic_publish`/`topic_unsubscribe` for pi; `folie topics|subscribe|unsubscribe|publish` for operators. Verified on the cluster's Postgres with the `echo` runtime (agent-initiated publish is covered by tests, not run live). Next: the TUI on OpenTUI (fleet grid, then live stream).
+4. ~~Topics and peer delegation~~ done: `message_send`, `topic_subscribe`/`topic_publish`/`topic_unsubscribe` for pi; `folie topics|subscribe|unsubscribe|publish` for operators. Verified on the cluster's Postgres with the `echo` runtime (agent-initiated publish is covered by tests, not run live).
+5. ~~Operator TUI~~ done and driven against the live cluster in a pty (submit, dispatch, wake, report, suspend, quit). Not yet: mouse-driven selection, a transcript view (see below), push instead of polling, reconnecting a dropped port-forward.
+6. The proposals in [Lessons from pi's design](#lessons-from-pis-design), which need decisions.
