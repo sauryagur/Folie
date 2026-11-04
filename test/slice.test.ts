@@ -1,68 +1,15 @@
 // The slice, wired for real except ax and the LLM: goal -> queue -> pool -> wake -> session -> report -> quiet -> suspend.
-import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest";
-import { AgentLoop } from "../src/agent/loop";
+import { afterAll, beforeEach, expect, it } from "vitest";
 import type { Runtime } from "../src/agent/runtime";
 import { echoRuntime } from "../src/agent/runtimes/echo";
-import { Controller } from "../src/server/controller";
-import type { Database } from "../src/server/db";
-import { httpServer } from "../src/server/http";
-import { SwarmService } from "../src/server/service";
-import type { Store } from "../src/server/store";
-import { FolieClient } from "../src/shared/client";
-import { testStore } from "./support/db";
-import { FakeAx, FakeEgress, silent } from "./support/fakes";
+import { startCluster } from "./support/cluster";
+import type { FakeAx } from "./support/fakes";
 
-const MAX_AGENTS = 2;
-
-let db: Database;
-let store: Store;
-let reset: () => Promise<void>;
-let server: Server;
-let client: FolieClient;
+const cluster = await startCluster();
+const { client, tick, runAgents, age } = cluster;
 let ax: FakeAx;
-let controller: Controller;
-let service: SwarmService;
-
-beforeAll(async () => {
-  ({ db, store, reset } = await testStore());
-  service = new SwarmService(store);
-  server = httpServer(service, { run: (op, agent) => controller.run(op, agent) }).listen(0);
-  await new Promise((r) => server.once("listening", r));
-  client = new FolieClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
-});
-beforeEach(async () => {
-  await reset();
-  ax = new FakeAx();
-  controller = new Controller(
-    ax,
-    new FakeEgress(ax.calls),
-    store.agents,
-    { atespace: "folie", image: "img@sha256:1", command: ["agent"], env: {}, suspendAfterSec: 60, deleteAfterSec: 600 },
-    silent,
-  );
-});
-afterAll(async () => {
-  server.close();
-  await db.close();
-});
-
-/** What folie-server does each interval. */
-async function tick() {
-  await service.dispatchQueued(MAX_AGENTS);
-  await controller.reconcileOnce();
-}
-
-/** Plays the cluster: every task the controller has made runs its agent loop once. */
-async function runAgents(runtimeFor: (name: string) => Runtime) {
-  for (const { spec, phase } of ax.tasks.values()) {
-    if (phase === "Running") await new AgentLoop(spec.name, client, runtimeFor(spec.name), silent).tick();
-  }
-}
-
-const age = (name: string, seconds: number) =>
-  db.query("UPDATE agents SET last_active_at = now() - make_interval(secs => $2) WHERE name = $1", [name, seconds]);
+beforeEach(async () => void ({ ax } = await cluster.reset()));
+afterAll(() => cluster.close());
 
 it("a submitted goal waits in the queue, then wakes a pool agent that works it and reports", async () => {
   const { workItem, message } = await client.submitGoal({ goal: "implement the PRD" });

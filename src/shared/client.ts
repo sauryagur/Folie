@@ -1,17 +1,24 @@
-// Typed HTTP client for folie-server; used by the CLI and by the agent program.
+// Typed HTTP client for folie-server; used by the CLI, the TUI and the agent program.
+import { traceHeaders } from "./trace";
 import type {
   AgentInfo,
   AgentOp,
   AgentOpResult,
-  MessageQuery,
+  EventQuery,
+  InboxQuery,
   Message,
+  MessageQuery,
   PublishRequest,
   PublishResult,
   Report,
   SendMessageRequest,
+  SendResult,
+  SessionEvent,
+  SessionEventBatch,
   SubmitGoalRequest,
   SubmitReportRequest,
   SubscribeRequest,
+  ToolAttempt,
   TopicInfo,
   WorkItem,
   WorkItemView,
@@ -32,9 +39,11 @@ export class FolieClient {
   ) {}
 
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
+    // The active span, if any, rides along as traceparent/tracestate: the server's work joins the caller's trace.
+    const headers = { ...(body === undefined ? {} : { "content-type": "application/json" }), ...traceHeaders() };
     const res = await this.fetchFn(this.baseUrl + path, {
       method,
-      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -51,11 +60,13 @@ export class FolieClient {
   agents() {
     return this.req<AgentInfo[]>("GET", "/v1/agents");
   }
-  inbox(agent: string) {
-    return this.req<Message[]>("GET", `/v1/agents/${encodeURIComponent(agent)}/inbox`);
+  /** Unread mail. With `q.workItem`, only what a session for that work item may take (see InboxQuery). */
+  inbox(agent: string, q: InboxQuery = {}) {
+    const qs = q.workItem === undefined ? "" : `?workItem=${q.workItem}`;
+    return this.req<Message[]>("GET", `/v1/agents/${encodeURIComponent(agent)}/inbox${qs}`);
   }
   send(r: SendMessageRequest) {
-    return this.req<Message>("POST", "/v1/messages", r);
+    return this.req<SendResult>("POST", "/v1/messages", r);
   }
   report(r: SubmitReportRequest) {
     return this.req<Report>("POST", "/v1/reports", r);
@@ -81,5 +92,17 @@ export class FolieClient {
   }
   publish(topic: string, r: PublishRequest) {
     return this.req<PublishResult>("POST", `/v1/topics/${encodeURIComponent(topic)}/publish`, r);
+  }
+  /** Appends a session's transcript events. Safe to resend: events are keyed by (sessionId, seq). */
+  sessionEvents(batch: SessionEventBatch) {
+    return this.req<{ stored: number }>("POST", "/v1/sessions/events", batch);
+  }
+  /** Reads transcript events, ascending by id; see EventQuery. */
+  readEvents(q: EventQuery = {}) {
+    return this.req<SessionEvent[]>("GET", `/v1/sessions/events${queryString({ ...q })}`);
+  }
+  /** Non-replayable tool calls earlier sessions at `scope` made, so a restarted session knows what already happened. */
+  attempts(agent: string, scope: string, excludeSession?: string) {
+    return this.req<ToolAttempt[]>("GET", `/v1/sessions/attempts${queryString({ agent, scope, exclude: excludeSession })}`);
   }
 }

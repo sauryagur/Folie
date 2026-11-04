@@ -17,7 +17,9 @@ class FakeAgents {
   idleByState = new Map<string, string[]>();
   idleQueries: [string, number][] = [];
   states = new Map<string, string>();
-  withUnread = async () => this.unread;
+  wakeDemand = async () => this.unread.map((name) => ({ name, traceparent: null, tracestate: null }));
+  retraced: string[] = [];
+  retrace = async (name: string) => void this.retraced.push(name);
   idle = async (state: string, seconds: number) => (this.idleQueries.push([state, seconds]), this.idleByState.get(state) ?? []);
   setState = async (name: string, state: string) => void this.states.set(name, state);
   touched: string[] = [];

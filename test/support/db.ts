@@ -26,6 +26,9 @@ export async function testDatabase(): Promise<Database> {
 
 export async function testStore(): Promise<{ db: Database; store: Store; reset: () => Promise<void> }> {
   const db = await testDatabase();
-  const reset = async () => void (await db.query("TRUNCATE agents, work_items, messages, sessions, reports RESTART IDENTITY CASCADE"));
+  const reset = async () => void (await db.query("TRUNCATE agents, work_items, messages, sessions, reports, session_events RESTART IDENTITY CASCADE"));
   return { db, store: pgStore(db), reset };
 }
+
+/** Names of the agents the controller would wake right now. */
+export const wakeNames = async (store: Store): Promise<string[]> => (await store.agents.wakeDemand()).map((d) => d.name);

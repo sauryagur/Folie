@@ -11,6 +11,8 @@ export interface ServerConfig {
   maxAgents: number;
   controller: ControllerConfig;
   substrate: SubstrateOptions;
+  /** Collector base URL (OTLP/HTTP). Unset: spans still propagate, nothing is exported. */
+  otlpEndpoint?: string;
 }
 
 /** Vars named FOLIE_AGENT_ENV_<NAME> are forwarded into every agent task as <NAME> (e.g. the LLM key). */
@@ -52,6 +54,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
   return {
     port: Number(env.PORT ?? 8080),
     databaseUrl: required(env, "DATABASE_URL"),
+    otlpEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT || undefined,
     axAddr: env.AX_ADDR ?? "ax-server.ax-system.svc:8080",
     reconcileMs: Number(env.FOLIE_RECONCILE_MS ?? 2000),
     maxAgents: positiveInt(env, "FOLIE_MAX_AGENTS", 8),

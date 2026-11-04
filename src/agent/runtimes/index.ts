@@ -30,7 +30,7 @@ export async function createRuntime(env: RuntimeEnv, server: SwarmServer): Promi
     model,
     streamFn: models.streamSimple.bind(models),
     codingTools: createCodingTools(env.workdir) as never,
-    stateFile: `${env.workdir}/.folie/conversation.json`,
+    workdir: env.workdir,
     server,
   });
 }

@@ -48,6 +48,33 @@ CREATE TABLE IF NOT EXISTS reports (
   summary    text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+-- Added after the first releases: ALTERs keep existing databases (and their history) intact.
+ALTER TABLE messages   ADD COLUMN IF NOT EXISTS request_id  text;
+ALTER TABLE messages   ADD COLUMN IF NOT EXISTS traceparent text;
+ALTER TABLE messages   ADD COLUMN IF NOT EXISTS tracestate  text;
+-- At-most-once delivery: the same sender repeating a request id reaches the same recipient only once.
+CREATE UNIQUE INDEX IF NOT EXISTS messages_request ON messages (sender, request_id, recipient) WHERE request_id IS NOT NULL;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS traceparent text;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS tracestate  text;
+ALTER TABLE reports    ADD COLUMN IF NOT EXISTS prompt_tokens     int;
+ALTER TABLE reports    ADD COLUMN IF NOT EXISTS completion_tokens int;
+ALTER TABLE reports    ADD COLUMN IF NOT EXISTS cost_usd          double precision;
+ALTER TABLE reports    ADD COLUMN IF NOT EXISTS tool_calls        int;
+ALTER TABLE reports    ADD COLUMN IF NOT EXISTS tool_failures     int;
+-- The session transcript, append-only. Written only by folie-server, on behalf of agents over HTTP.
+CREATE TABLE IF NOT EXISTS session_events (
+  id         serial PRIMARY KEY,
+  agent      text NOT NULL,
+  session_id text NOT NULL,
+  scope      text NOT NULL,
+  seq        int  NOT NULL,
+  type       text NOT NULL,
+  data       jsonb NOT NULL,
+  trace_id   text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (session_id, seq)
+);
+CREATE INDEX IF NOT EXISTS session_events_scope ON session_events (agent, scope, id);
 `;
 
 // Arbitrary constant: "folie" in ASCII. Old and new server pods overlap during a rollout and

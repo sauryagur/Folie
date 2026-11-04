@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRuntime } from "../../src/agent/runtimes";
 import type { Message } from "../../src/shared/types";
+import { fakeSession } from "../support/session";
 
 const env = { agentName: "a", runtime: "echo", model: "anthropic/x", workdir: "/tmp" };
 const server = {
@@ -8,13 +9,14 @@ const server = {
   subscribe: async () => { throw new Error("unused"); },
   unsubscribe: async () => { throw new Error("unused"); },
   publish: async () => { throw new Error("unused"); },
+  attempts: async () => [],
 };
 const m = (id: number, from: string, body: string): Message => ({ id, from, to: "a", body, workItemId: null, topic: null, createdAt: "", ackedAt: null });
 
 describe("createRuntime", () => {
   it("echo summarizes every message deterministically", async () => {
     const rt = await createRuntime(env, server);
-    expect(await rt.run([m(1, "human", "hi"), m(2, "bob", "yo")])).toEqual({ outcome: "done", summary: "echo: [human] hi | [bob] yo" });
+    expect(await rt.run([m(1, "human", "hi"), m(2, "bob", "yo")], fakeSession().session)).toEqual({ outcome: "done", summary: "echo: [human] hi | [bob] yo" });
   });
 
   it("rejects unknown runtimes, naming the choices", async () => {

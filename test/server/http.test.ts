@@ -8,6 +8,7 @@ import type { AgentOps } from "../../src/server/ops";
 import { SwarmService } from "../../src/server/service";
 import { FolieClient } from "../../src/shared/client";
 import type { AgentOp } from "../../src/shared/types";
+import { otlpGateway } from "../../src/server/otlp-gateway";
 import { testStore } from "../support/db";
 
 let db: Database;
@@ -29,7 +30,7 @@ const ops: AgentOps = {
 beforeAll(async () => {
   let store;
   ({ db, store, reset } = await testStore());
-  server = httpServer(new SwarmService(store), ops).listen(0);
+  server = httpServer(new SwarmService(store), ops, otlpGateway(undefined)).listen(0);
   await new Promise((r) => server.once("listening", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   client = new FolieClient(base);

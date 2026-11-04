@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Database } from "../../src/server/db";
 import type { Store } from "../../src/server/store";
-import { testStore } from "../support/db";
+import { testStore, wakeNames } from "../support/db";
 
 let db: Database;
 let store: Store;
@@ -60,14 +60,14 @@ describe("agents", () => {
     ]);
   });
 
-  it("withUnread is the wake demand: agents with any unacked mail, once each", async () => {
+  it("wakeDemand is agents with any unacked mail, once each", async () => {
     await store.agents.touch("a");
     await store.agents.touch("b");
     await store.messages.send({ from: "h", to: "b", body: "1" });
     const m = await store.messages.send({ from: "h", to: "b", body: "2" });
-    expect(await store.agents.withUnread()).toEqual(["b"]);
+    expect(await wakeNames(store)).toEqual(["b"]);
     await store.messages.ack("b", [m.id - 1, m.id]);
-    expect(await store.agents.withUnread()).toEqual([]);
+    expect(await wakeNames(store)).toEqual([]);
   });
 
   it("advances wake epoch only on transition into running", async () => {
@@ -180,41 +180,41 @@ describe("topics", () => {
 
   it("publish copies the message to every subscriber except the publisher", async () => {
     await subscribers("news", ["a", "b", "c"]);
-    const copies = await store.topics.publish("news", "a", "hello");
+    const { copies } = await store.topics.publish("news", "a", "hello");
 
     expect(copies.map((m) => m.to)).toEqual(["b", "c"]);
     expect(copies[0]).toMatchObject({ from: "a", body: "hello", topic: "news", workItemId: null, ackedAt: null });
     expect(await store.messages.unacked("a")).toEqual([]);
     expect((await store.messages.unacked("b"))[0]).toMatchObject({ topic: "news", body: "hello" });
-    expect(await store.agents.withUnread()).toEqual(["b", "c"]);
+    expect(await wakeNames(store)).toEqual(["b", "c"]);
   });
 
   it("a publisher that is not a subscriber reaches everyone", async () => {
     await subscribers("news", ["a", "b"]);
-    expect((await store.topics.publish("news", "human", "x")).map((m) => m.to)).toEqual(["a", "b"]);
+    expect((await store.topics.publish("news", "human", "x")).copies.map((m) => m.to)).toEqual(["a", "b"]);
   });
 
   it("publishing to a topic nobody listens to delivers nothing and creates no mail", async () => {
     await store.agents.touch("a");
-    expect(await store.topics.publish("empty", "a", "x")).toEqual([]);
-    expect(await store.agents.withUnread()).toEqual([]);
+    expect((await store.topics.publish("empty", "a", "x")).copies).toEqual([]);
+    expect(await wakeNames(store)).toEqual([]);
   });
 
   it("keeps topics separate", async () => {
     await subscribers("one", ["a"]);
     await subscribers("two", ["b"]);
     await store.topics.publish("one", "human", "only for one");
-    expect(await store.agents.withUnread()).toEqual(["a"]);
+    expect(await wakeNames(store)).toEqual(["a"]);
   });
 
   it("subscribe is idempotent and unsubscribe stops delivery", async () => {
     await subscribers("news", ["a"]);
     await store.topics.subscribe("news", "a");
-    expect(await store.topics.publish("news", "human", "1")).toHaveLength(1);
+    expect((await store.topics.publish("news", "human", "1")).copies).toHaveLength(1);
 
     await store.topics.unsubscribe("news", "a");
     await store.topics.unsubscribe("news", "a");
-    expect(await store.topics.publish("news", "human", "2")).toEqual([]);
+    expect((await store.topics.publish("news", "human", "2")).copies).toEqual([]);
   });
 
   it("only delivers to subscribers present at publish time: nothing is replayed to late joiners", async () => {
@@ -228,7 +228,7 @@ describe("topics", () => {
     await subscribers("news", ["b"]);
     await store.agents.setState("b", "running");
     await age("b", 3600);
-    const [copy] = await store.topics.publish("news", "human", "x");
+    const [copy] = (await store.topics.publish("news", "human", "x")).copies;
     await store.messages.ack("b", [copy!.id]);
     expect(await store.agents.idle("running", 60)).toEqual([]);
   });
@@ -257,9 +257,9 @@ describe("message log", () => {
       await store.messages.send({ from: "a", to: "b", body: "1" }),
       await store.messages.send({ from: "b", to: "a", body: "2" }),
     ];
-    sent.push(...(await store.topics.publish("t", "a", "3")));
+    sent.push(...(await store.topics.publish("t", "a", "3")).copies);
     await store.topics.subscribe("t", "c");
-    sent.push(...(await store.topics.publish("t", "a", "4")));
+    sent.push(...(await store.topics.publish("t", "a", "4")).copies);
     sent.push(await store.messages.send({ from: "human", to: "b", body: "5" }));
     return sent;
   }

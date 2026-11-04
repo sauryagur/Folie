@@ -3,7 +3,7 @@ import type { Database } from "../../src/server/db";
 import { NotFoundError, ValidationError } from "../../src/server/errors";
 import { SwarmService } from "../../src/server/service";
 import type { Store } from "../../src/server/store";
-import { testStore } from "../support/db";
+import { testStore, wakeNames } from "../support/db";
 
 let db: Database;
 let store: Store;
@@ -30,7 +30,7 @@ describe("submitGoal", () => {
     const { workItem, message } = await goalTo("alice", "build it");
     expect(workItem).toMatchObject({ goal: "build it", state: "assigned" });
     expect(message).toMatchObject({ from: "human", to: "alice", body: "build it", workItemId: workItem.id });
-    expect(await store.agents.withUnread()).toEqual(["alice"]);
+    expect(await wakeNames(store)).toEqual(["alice"]);
   });
 
   it("queues a goal with no target: no message, no agent, nobody woken", async () => {
@@ -38,7 +38,7 @@ describe("submitGoal", () => {
     expect(message).toBeNull();
     expect(workItem.state).toBe("queued");
     expect(await store.agents.list()).toEqual([]);
-    expect(await store.agents.withUnread()).toEqual([]);
+    expect(await wakeNames(store)).toEqual([]);
   });
 
   it.each([
