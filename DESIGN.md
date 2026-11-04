@@ -130,7 +130,7 @@ One command creates the whole world on a laptop: kind cluster, Agent Substrate, 
 ## Message substrate and wake semantics
 
 - **Inbox-non-empty is the only wake.** Human goal submission, controller assignment, peer delegation, and topic delivery all reduce to "there is a message in your inbox." Any agent can wake any other by sending it a message — that is the emergence mechanism, and it is the _only_ mechanism, so it is uniform and observable.
-- **Topics are durable, not live.** `publish(topic)` copies the message into every current subscriber's inbox. Delivery survives suspension; a suspended agent wakes with its backlog. Nothing is delivered only to concurrently-running agents; nothing is lost.
+- **Topics are durable, not live.** `publish(topic)` copies the message into every current subscriber's inbox, in one statement, excluding the publisher (so an agent announcing to a topic it follows does not wake itself). Delivery survives suspension and retirement: subscriptions live in Postgres, so a suspended agent wakes with its backlog and a retired one starts a fresh task for it. Nothing is replayed to agents that subscribe later. A topic exists while it has subscribers; publishing to one with none delivers zero copies and leaves no trace (the one gap in the audit log). Anyone can publish (`folie publish`, or an agent's `topic_publish`); an agent can subscribe before it has ever run.
 - **The message table is the audit trail.** Every goal issued, every delegation, every report passes through folie-server and is recorded server-side. Agents cannot forge or delete it — they hold no database credentials. (The Hugging Face incident swarm forged its own logs; that failure mode is structurally excluded here.)
 - **Failure is one-shot and visible.** A failed session reports `outcome=failed`, the work item parks in `blocked`, and the TUI surfaces it. No retries in v1 — operators decide what to do with failures.
 
@@ -146,8 +146,8 @@ One command creates the whole world on a laptop: kind cluster, Agent Substrate, 
 ## Data model (Postgres, all writes via folie-server)
 
 - `agents` — name (identity), state (`pending`, `running`, `suspended`, `retired`), wake epoch (advances on each transition into running), last activity.
-- `messages` — the audit log: id, from, to (agent or topic), topic, body, created, delivered/acked. Append-only.
-- `topics`, `topic_subscriptions` — channel registry.
+- `messages` — the audit log: id, sender, recipient (always an agent), body, work item, topic (set when it came from a publish), created, acked. A publish is stored as one row per subscriber.
+- `topic_subscriptions` — (topic, agent); there is no separate topic registry.
 - `work_items` — id, goal (opaque text), context refs, priority, state (`queued`, `assigned`, `blocked`, `done`, `failed`).
 - `sessions` — agent, started/ended, message ids consumed, report ref.
 - `reports` — session outcome, summary, artifacts refs.
@@ -224,4 +224,4 @@ Pi facts: `pi-agent-core` (agent runtime SDK), `pi-durable` (durable conversatio
 1. ~~`folie up`~~ done: kind + Substrate + ax + Postgres + folie-server, idempotent.
 2. End-to-end slice: done and exercised in the cluster with the `echo` runtime, and with pi up to a real provider call (bogus key). Pi completing real coding work against a valid key is unexercised. Run `bun run test`.
 3. ~~Elastic pool~~ done (above). Conversation is persisted by Folie as `/workspace/.folie/conversation.json`, not yet via `pi-durable`. Not yet: backlog-aware scaling beyond one-goal-per-agent, scale-down hysteresis tuning, deleting retired agent rows.
-4. Topics and peer delegation (`message_send` exists); TUI fleet grid, then live stream.
+4. ~~Topics and peer delegation~~ done: `message_send`, `topic_subscribe`/`topic_publish`/`topic_unsubscribe` for pi; `folie topics|subscribe|unsubscribe|publish` for operators. Verified on the cluster's Postgres with the `echo` runtime (agent-initiated publish is covered by tests, not run live). Next: the TUI on OpenTUI (fleet grid, then live stream).
