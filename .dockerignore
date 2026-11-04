@@ -1,0 +1,4 @@
+*
+!bin/folie-agent
+!bin/folie-server
+!proto/*.proto
