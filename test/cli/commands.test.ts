@@ -98,7 +98,7 @@ describe("agents", () => {
     expect(lines).toEqual(["no agents yet"]);
 
     lines.length = 0;
-    await agents({ ...api, agents: async () => [{ name: "a", state: "running", wakeEpoch: 2, unread: 1 }] }, [], out);
+    await agents({ ...api, agents: async () => [{ name: "a", state: "running", wakeEpoch: 2, unread: 1, lastActiveAt: "" }] }, [], out);
     expect(lines[0]).toMatch(/^a\s+running\s+unread=1 wakes=2$/);
   });
 });

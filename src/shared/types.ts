@@ -36,6 +36,8 @@ export interface AgentInfo {
   state: string;
   wakeEpoch: number;
   unread: number;
+  /** Last mail in or report out; the quiet period that suspension counts from. */
+  lastActiveAt: string;
 }
 
 export interface SubmitGoalRequest {
@@ -87,4 +89,21 @@ export interface PublishRequest {
 export interface PublishResult {
   /** Copies delivered: one per subscriber other than the publisher. */
   delivered: number;
+}
+
+/** Filters for reading the message log. Without `after` it returns the newest `limit` messages, oldest first. */
+export interface MessageQuery {
+  after?: number;
+  limit?: number;
+  topic?: string;
+  /** Messages sent to or from this agent. */
+  agent?: string;
+}
+
+export type AgentOp = "suspend" | "resume" | "delete";
+
+export interface AgentOpResult {
+  agent: string;
+  /** The agent's state after the operation. */
+  state: string;
 }

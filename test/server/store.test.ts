@@ -55,8 +55,8 @@ describe("agents", () => {
     await store.messages.send({ from: "h", to: "a", body: "2" });
 
     expect(await store.agents.list()).toEqual([
-      { name: "a", state: "pending", wakeEpoch: 0, unread: 2 },
-      { name: "b", state: "pending", wakeEpoch: 0, unread: 0 },
+      { name: "a", state: "pending", wakeEpoch: 0, unread: 2, lastActiveAt: expect.any(String) },
+      { name: "b", state: "pending", wakeEpoch: 0, unread: 0, lastActiveAt: expect.any(String) },
     ]);
   });
 
@@ -246,5 +246,75 @@ describe("topics", () => {
 
   it("refuses a subscription for an agent that does not exist", async () => {
     await expect(store.topics.subscribe("news", "ghost")).rejects.toThrow();
+  });
+});
+
+describe("message log", () => {
+  /** a->b, b->a, a->c on topic "t", human->b: ids ascending in that order. */
+  async function seed() {
+    for (const n of ["a", "b", "c"]) await store.agents.touch(n);
+    const sent = [
+      await store.messages.send({ from: "a", to: "b", body: "1" }),
+      await store.messages.send({ from: "b", to: "a", body: "2" }),
+    ];
+    sent.push(...(await store.topics.publish("t", "a", "3")));
+    await store.topics.subscribe("t", "c");
+    sent.push(...(await store.topics.publish("t", "a", "4")));
+    sent.push(await store.messages.send({ from: "human", to: "b", body: "5" }));
+    return sent;
+  }
+
+  it("returns everything, acked or not, oldest first", async () => {
+    const [first] = await seed();
+    await store.messages.ack("b", [first!.id]);
+    const all = await store.messages.list({});
+    expect(all.map((m) => m.body)).toEqual(["1", "2", "4", "5"]);
+    expect(all[0]!.ackedAt).not.toBeNull();
+  });
+
+  it("without a cursor returns the newest `limit`, still oldest first", async () => {
+    await seed();
+    expect((await store.messages.list({ limit: 2 })).map((m) => m.body)).toEqual(["4", "5"]);
+  });
+
+  it("with a cursor returns what came after it, so a poller never misses or repeats a message", async () => {
+    const sent = await seed();
+    const page = await store.messages.list({ after: sent[1]!.id, limit: 100 });
+    expect(page.map((m) => m.body)).toEqual(["4", "5"]);
+    expect(await store.messages.list({ after: page.at(-1)!.id })).toEqual([]);
+    const first = await store.messages.list({ after: 0, limit: 2 });
+    expect(first.map((m) => m.body)).toEqual(["1", "2"]);
+  });
+
+  it("filters by topic and by agent (either end of the message)", async () => {
+    await seed();
+    expect((await store.messages.list({ topic: "t" })).map((m) => m.body)).toEqual(["4"]);
+    expect((await store.messages.list({ agent: "a" })).map((m) => m.body)).toEqual(["1", "2", "4"]);
+    expect((await store.messages.list({ agent: "c" })).map((m) => m.body)).toEqual(["4"]);
+    expect((await store.messages.list({ agent: "b", topic: "t" }))).toEqual([]);
+  });
+
+  it("clamps limit to 1..500", async () => {
+    await seed();
+    expect(await store.messages.list({ limit: 0 })).toHaveLength(1);
+    expect(await store.messages.list({ limit: 100000 })).toHaveLength(4);
+  });
+});
+
+describe("report list", () => {
+  async function report(agent: string, summary: string) {
+    await store.agents.touch(agent);
+    const m = await store.messages.send({ from: "h", to: agent, body: "x" });
+    return store.reports.record({ agent, startedAt: new Date().toISOString(), outcome: "done", summary, messageIds: [m.id] });
+  }
+
+  it("lists newest first, optionally for one agent, capped by limit", async () => {
+    await report("a", "a1");
+    await report("b", "b1");
+    await report("a", "a2");
+    expect((await store.reports.list({})).map((r) => r.summary)).toEqual(["a2", "b1", "a1"]);
+    expect((await store.reports.list({ agent: "a" })).map((r) => r.summary)).toEqual(["a2", "a1"]);
+    expect((await store.reports.list({ limit: 1 })).map((r) => r.summary)).toEqual(["a2"]);
+    expect(await store.reports.list({ agent: "nobody" })).toEqual([]);
   });
 });

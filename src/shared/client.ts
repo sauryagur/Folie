@@ -1,6 +1,9 @@
 // Typed HTTP client for folie-server; used by the CLI and by the agent program.
 import type {
   AgentInfo,
+  AgentOp,
+  AgentOpResult,
+  MessageQuery,
   Message,
   PublishRequest,
   PublishResult,
@@ -13,6 +16,14 @@ import type {
   WorkItem,
   WorkItemView,
 } from "./types";
+
+/** "?a=1&b=x" for the defined values, "" when there are none. */
+function queryString(params: Record<string, string | number | undefined>): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined) p.set(k, String(v));
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
 
 export class FolieClient {
   constructor(
@@ -48,6 +59,16 @@ export class FolieClient {
   }
   report(r: SubmitReportRequest) {
     return this.req<Report>("POST", "/v1/reports", r);
+  }
+  /** The audit log; see MessageQuery. */
+  messages(q: MessageQuery = {}) {
+    return this.req<Message[]>("GET", `/v1/messages${queryString({ ...q })}`);
+  }
+  reports(q: { agent?: string; limit?: number } = {}) {
+    return this.req<Report[]>("GET", `/v1/reports${queryString({ ...q })}`);
+  }
+  agentOp(op: AgentOp, agent: string) {
+    return this.req<AgentOpResult>("POST", `/v1/agents/${encodeURIComponent(agent)}/${op}`, {});
   }
   topics() {
     return this.req<TopicInfo[]>("GET", "/v1/topics");

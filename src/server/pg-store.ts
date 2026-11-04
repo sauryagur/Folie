@@ -48,6 +48,23 @@ const messages = (q: Queryable): MessageRepo => ({
     );
     return rows.map(toMessage);
   },
+  async list({ after, limit, topic, agent }) {
+    const n = Math.min(Math.max(limit ?? 100, 1), 500);
+    const filter = "($1::text IS NULL OR topic = $1) AND ($2::text IS NULL OR recipient = $2 OR sender = $2)";
+    if (after !== undefined) {
+      const { rows } = await q.query(
+        `SELECT ${MESSAGE_COLS} FROM messages WHERE id > $3 AND ${filter} ORDER BY id LIMIT $4`,
+        [topic ?? null, agent ?? null, after, n],
+      );
+      return rows.map(toMessage);
+    }
+    // No cursor: the newest n, handed back oldest first so callers can append in order.
+    const { rows } = await q.query(
+      `SELECT * FROM (SELECT ${MESSAGE_COLS} FROM messages WHERE ${filter} ORDER BY id DESC LIMIT $3) t ORDER BY id`,
+      [topic ?? null, agent ?? null, n],
+    );
+    return rows.map(toMessage);
+  },
   async ack(to, ids) {
     const { rows } = await q.query(
       `UPDATE messages SET acked_at = now()
@@ -98,7 +115,7 @@ const agents = (q: Queryable): AgentRepo => ({
   },
   async list() {
     const { rows } = await q.query(
-      `SELECT a.name, a.state, a.wake_epoch, count(m.id)::int AS unread
+      `SELECT a.name, a.state, a.wake_epoch, a.last_active_at, count(m.id)::int AS unread
        FROM agents a LEFT JOIN messages m ON m.recipient = a.name AND m.acked_at IS NULL
        GROUP BY a.name ORDER BY a.name`,
     );
@@ -107,6 +124,7 @@ const agents = (q: Queryable): AgentRepo => ({
       state: r.state as string,
       wakeEpoch: r.wake_epoch as number,
       unread: r.unread as number,
+      lastActiveAt: iso(r.last_active_at),
     }));
   },
   async withUnread() {
@@ -144,6 +162,16 @@ const reports = (q: Queryable): ReportRepo => ({
       [s.rows[0]!.id, outcome, summary, agent, messageIds],
     );
     return toReport(rows[0]!);
+  },
+  async list({ agent, limit }) {
+    const { rows } = await q.query(
+      `SELECT r.id, s.agent, r.outcome, r.summary, s.message_ids, r.created_at
+       FROM reports r JOIN sessions s ON s.id = r.session_id
+       WHERE $1::text IS NULL OR s.agent = $1
+       ORDER BY r.id DESC LIMIT $2`,
+      [agent ?? null, Math.min(Math.max(limit ?? 50, 1), 500)],
+    );
+    return rows.map(toReport);
   },
 });
 

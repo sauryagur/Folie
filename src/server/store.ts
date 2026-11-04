@@ -1,11 +1,13 @@
 // Persistence ports. The service and controller depend on these, never on SQL.
-import type { AgentInfo, Message, Outcome, Report, TopicInfo, WorkItem, WorkItemState } from "../shared/types";
+import type { AgentInfo, Message, MessageQuery, Outcome, Report, TopicInfo, WorkItem, WorkItemState } from "../shared/types";
 
 export interface MessageRepo {
   send(m: { from: string; to: string; body: string; workItemId?: number }): Promise<Message>;
   unacked(to: string): Promise<Message[]>;
   /** Acks exactly the given unacked messages of `to`; returns those actually acked. */
   ack(to: string, ids: number[]): Promise<Message[]>;
+  /** The audit log, ascending by id, capped at `limit` (default 100, max 500). See MessageQuery. */
+  list(q: MessageQuery): Promise<Message[]>;
 }
 
 export interface WorkItemRepo {
@@ -31,6 +33,8 @@ export interface AgentRepo {
 
 export interface ReportRepo {
   record(r: { agent: string; startedAt: string; outcome: Outcome; summary: string; messageIds: number[] }): Promise<Report>;
+  /** Newest first. */
+  list(q: { agent?: string; limit?: number }): Promise<Report[]>;
 }
 
 export interface TopicRepo {

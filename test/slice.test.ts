@@ -28,7 +28,7 @@ let service: SwarmService;
 beforeAll(async () => {
   ({ db, store, reset } = await testStore());
   service = new SwarmService(store);
-  server = httpServer(service).listen(0);
+  server = httpServer(service, { run: (op, agent) => controller.run(op, agent) }).listen(0);
   await new Promise((r) => server.once("listening", r));
   client = new FolieClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
 });
@@ -220,4 +220,32 @@ it("lifecycle: quiet agents are suspended, resumed by new mail with the same tas
   expect(ax.tasks.get("folie/agent-1")!.phase).toBe("Running");
   await runAgents(() => echoRuntime);
   expect((await client.workItem(third.id)).workItem.state).toBe("done");
+});
+
+it("operator steering over HTTP: suspend, resume and the delete kill switch", async () => {
+  await client.submitGoal({ goal: "work", to: "a" });
+  await tick();
+  await runAgents(() => echoRuntime);
+
+  expect(await client.agentOp("suspend", "a")).toEqual({ agent: "a", state: "suspended" });
+  expect(ax.tasks.get("folie/a")!.phase).toBe("Suspended");
+  await tick(); // nothing wakes it: no mail
+  expect(ax.tasks.get("folie/a")!.phase).toBe("Suspended");
+
+  // Resuming by hand restarts the quiet period, so the sweep does not suspend it straight back.
+  await age("a", 3600);
+  await client.agentOp("resume", "a");
+  await tick();
+  expect(ax.tasks.get("folie/a")!.phase).toBe("Running");
+  expect((await client.agents())[0]).toMatchObject({ state: "running" });
+
+  expect(await client.agentOp("delete", "a")).toEqual({ agent: "a", state: "retired" });
+  expect(ax.tasks.has("folie/a")).toBe(false);
+
+  // Mail to a deleted agent starts a fresh task: deletion is retirement, not a ban.
+  await client.send({ from: "human", to: "a", body: "back again" });
+  await tick();
+  expect(ax.tasks.get("folie/a")!.phase).toBe("Running");
+
+  await expect(client.agentOp("suspend", "never-existed")).rejects.toThrow(/404/);
 });

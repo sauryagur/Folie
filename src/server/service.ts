@@ -8,6 +8,7 @@ import {
   type SubscribeRequest,
   type TopicInfo,
   type Message,
+  type MessageQuery,
   type Report,
   type SendMessageRequest,
   type SubmitGoalRequest,
@@ -88,6 +89,24 @@ export class SwarmService {
 
   async inbox(agent: string): Promise<Message[]> {
     return this.store.messages.unacked(agentName(agent, "agent"));
+  }
+
+  /** The audit log for operators and the TUI: every message in the swarm, filterable. */
+  async messages(q: MessageQuery): Promise<Message[]> {
+    if (q.after !== undefined && (!Number.isInteger(q.after) || q.after < 0)) throw new ValidationError("after: non-negative integer required");
+    if (q.limit !== undefined && (!Number.isInteger(q.limit) || q.limit < 1)) throw new ValidationError("limit: positive integer required");
+    return this.store.messages.list({
+      after: q.after,
+      limit: q.limit,
+      topic: q.topic === undefined ? undefined : topicName(q.topic),
+      agent: q.agent === undefined ? undefined : agentName(q.agent, "agent"),
+    });
+  }
+
+  /** Session reports, newest first. */
+  async reports(q: { agent?: string; limit?: number }): Promise<Report[]> {
+    if (q.limit !== undefined && (!Number.isInteger(q.limit) || q.limit < 1)) throw new ValidationError("limit: positive integer required");
+    return this.store.reports.list({ agent: q.agent === undefined ? undefined : agentName(q.agent, "agent"), limit: q.limit });
   }
 
   listAgents(): Promise<AgentInfo[]> {

@@ -248,3 +248,31 @@ describe("topics", () => {
     expect(await svc.listAgents()).toEqual([]);
   });
 });
+
+describe("operator reads", () => {
+  it("messages validates its filters before touching the store", async () => {
+    for (const bad of [{ after: -1 }, { after: 1.5 }, { limit: 0 }, { limit: 2.5 }]) {
+      await expect(svc.messages(bad)).rejects.toBeInstanceOf(ValidationError);
+    }
+    await expect(svc.messages({ topic: "Bad Topic" })).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.messages({ agent: "Bad Agent" })).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("messages returns the log including queued-then-dispatched goals", async () => {
+    await svc.submitGoal({ goal: "queued" });
+    expect(await svc.messages({})).toEqual([]); // queued goals have no message until dispatched
+    await svc.dispatchQueued(8);
+    expect((await svc.messages({})).map((m) => m.body)).toEqual(["queued"]);
+  });
+
+  it("reports validates limit and agent, and lists newest first", async () => {
+    await expect(svc.reports({ limit: 0 })).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.reports({ agent: "Bad Agent" })).rejects.toBeInstanceOf(ValidationError);
+
+    const one = await goalTo("a", "1");
+    await report("a", [one.message.id]);
+    const two = await goalTo("a", "2");
+    await report("a", [two.message.id], "failed");
+    expect((await svc.reports({ agent: "a" })).map((r) => r.outcome)).toEqual(["failed", "done"]);
+  });
+});

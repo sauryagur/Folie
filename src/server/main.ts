@@ -31,7 +31,7 @@ const timer = setInterval(async () => {
   }
 }, cfg.reconcileMs);
 
-const server = httpServer(service).listen(cfg.port, () => console.log(`folie-server listening on :${cfg.port}`));
+const server = httpServer(service, controller).listen(cfg.port, () => console.log(`folie-server listening on :${cfg.port}`));
 
 for (const sig of ["SIGTERM", "SIGINT"] as const)
   process.on(sig, () => {

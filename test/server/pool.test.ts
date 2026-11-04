@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { choosePoolAgent } from "../../src/server/pool";
 import type { AgentInfo } from "../../src/shared/types";
 
-const agent = (name: string, state: string, unread = 0): AgentInfo => ({ name, state, wakeEpoch: 0, unread });
+const agent = (name: string, state: string, unread = 0): AgentInfo => ({ name, state, wakeEpoch: 0, unread, lastActiveAt: "" });
 
 describe("choosePoolAgent", () => {
   it("starts the pool with agent-1", () => {

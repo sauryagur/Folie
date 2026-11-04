@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { Controller, type ControllerConfig } from "../../src/server/controller";
+import { NotFoundError, ValidationError } from "../../src/server/errors";
 import { FakeAx, FakeEgress, silent } from "../support/fakes";
 
 const cfg: ControllerConfig = {
@@ -19,6 +20,8 @@ class FakeAgents {
   withUnread = async () => this.unread;
   idle = async (state: string, seconds: number) => (this.idleQueries.push([state, seconds]), this.idleByState.get(state) ?? []);
   setState = async (name: string, state: string) => void this.states.set(name, state);
+  touched: string[] = [];
+  touch = async (name: string) => void this.touched.push(name);
 }
 
 let ax: FakeAx;
@@ -167,6 +170,60 @@ describe("idle sweep: suspend", () => {
     agents.unread = ["a"];
     await controller.reconcileOnce(); // idle() reports nobody, as the real query excludes agents with mail
     expect(ax.calls).toEqual(["egress folie/a", "resume a"]);
+  });
+});
+
+describe("operator ops", () => {
+  it("suspend checkpoints a running agent and records it", async () => {
+    await taskIn("a", "Running");
+    expect(await controller.run("suspend", "a")).toEqual({ agent: "a", state: "suspended" });
+    expect(ax.calls).toEqual(["suspend a"]);
+    expect(agents.states.get("a")).toBe("suspended");
+  });
+
+  it("suspend of an already suspended agent is a no-op that fixes the record", async () => {
+    await taskIn("a", "Suspended");
+    await controller.run("suspend", "a");
+    expect(ax.calls).toEqual([]);
+    expect(agents.states.get("a")).toBe("suspended");
+  });
+
+  it("suspend refuses an agent with no task (404) or a task in some other phase (400)", async () => {
+    await expect(controller.run("suspend", "ghost")).rejects.toBeInstanceOf(NotFoundError);
+    await taskIn("a", "Failed");
+    await expect(controller.run("suspend", "a")).rejects.toBeInstanceOf(ValidationError);
+    expect(ax.calls).toEqual([]);
+  });
+
+  it("resume restarts the quiet period, grants egress and resumes, even with no mail", async () => {
+    await taskIn("a", "Suspended");
+    expect(await controller.run("resume", "a")).toEqual({ agent: "a", state: "running" });
+    expect(agents.touched).toEqual(["a"]);
+    expect(ax.calls).toEqual(["egress folie/a", "resume a"]);
+  });
+
+  it("resume creates the task for an agent that has none", async () => {
+    await controller.run("resume", "fresh");
+    expect(ax.calls).toEqual(["create fresh", "egress folie/fresh", "resume fresh"]);
+  });
+
+  it("delete is the kill switch: it destroys even a running task", async () => {
+    await taskIn("a", "Running");
+    expect(await controller.run("delete", "a")).toEqual({ agent: "a", state: "retired" });
+    expect(ax.calls).toEqual(["delete a"]);
+    expect(ax.tasks.has("folie/a")).toBe(false);
+    expect(agents.states.get("a")).toBe("retired");
+  });
+
+  it("delete of an agent with no task still records it retired, so repeating it is safe", async () => {
+    await controller.run("delete", "ghost");
+    expect(ax.calls).toEqual([]);
+    expect(agents.states.get("ghost")).toBe("retired");
+  });
+
+  it("rejects a malformed agent name before touching ax", async () => {
+    await expect(controller.run("delete", "Bad Name")).rejects.toBeInstanceOf(ValidationError);
+    expect(ax.calls).toEqual([]);
   });
 });
 

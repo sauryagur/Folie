@@ -6,6 +6,9 @@ import type { Logger } from "../shared/logger";
 import type { AxClient } from "./ax";
 import type { AgentRepo } from "./store";
 import type { EgressPolicies } from "./substrate";
+import { AGENT_NAME, type AgentOp, type AgentOpResult } from "../shared/types";
+import { NotFoundError, ValidationError } from "./errors";
+import type { AgentOps } from "./ops";
 
 export interface ControllerConfig {
   atespace: string;
@@ -19,9 +22,9 @@ export interface ControllerConfig {
   deleteAfterSec: number;
 }
 
-export type ControllerAgents = Pick<AgentRepo, "withUnread" | "idle" | "setState">;
+export type ControllerAgents = Pick<AgentRepo, "withUnread" | "idle" | "setState" | "touch">;
 
-export class Controller {
+export class Controller implements AgentOps {
   constructor(
     private readonly ax: AxClient,
     private readonly egress: EgressPolicies,
@@ -39,6 +42,30 @@ export class Controller {
     for (const name of await this.agents.idle("suspended", this.cfg.deleteAfterSec)) {
       await this.guard("retire", name, () => this.retire(name));
     }
+  }
+
+  /** Operator steering. Every op leaves the agent's recorded state matching ax, so the sweep does not fight it. */
+  async run(op: AgentOp, name: string): Promise<AgentOpResult> {
+    if (!AGENT_NAME.test(name)) throw new ValidationError("agent: invalid agent name");
+    const { atespace } = this.cfg;
+    const task = await this.ax.getTask(atespace, name);
+
+    if (op === "delete") {
+      if (task) await this.ax.deleteTask(atespace, name);
+      await this.agents.setState(name, "retired");
+      return { agent: name, state: "retired" };
+    }
+    if (op === "suspend") {
+      if (!task) throw new NotFoundError(`${name} has no task`);
+      if (task.phase === "Running") await this.ax.suspendTask(atespace, name);
+      else if (task.phase !== "Suspended") throw new ValidationError(`${name} is ${task.phase}; cannot suspend`);
+      await this.agents.setState(name, "suspended");
+      return { agent: name, state: "suspended" };
+    }
+    // resume: restart the quiet period first, or the idle sweep would suspend the agent again on the next pass.
+    await this.agents.touch(name);
+    await this.wake(name);
+    return { agent: name, state: "running" };
   }
 
   private async guard(what: string, name: string, fn: () => Promise<void>) {
