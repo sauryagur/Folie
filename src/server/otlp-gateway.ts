@@ -16,7 +16,7 @@ export interface OtlpGateway {
   forward(signal: OtlpSignal, body: Uint8Array, headers: { contentType: string; contentEncoding?: string }): Promise<number>;
 }
 
-export function otlpGateway(endpoint: string | undefined, fetchFn: typeof fetch = fetch): OtlpGateway {
+export function otlpGateway(endpoint: string | undefined, fetchFn: (url: string, init: RequestInit) => Promise<Response> = fetch): OtlpGateway {
   return {
     async forward(signal, body, { contentType, contentEncoding }) {
       // No collector configured: accept and drop, so agents do not retry or log errors for a feature that is off.

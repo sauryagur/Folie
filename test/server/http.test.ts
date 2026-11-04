@@ -8,8 +8,9 @@ import type { AgentOps } from "../../src/server/ops";
 import { SwarmService } from "../../src/server/service";
 import { FolieClient } from "../../src/shared/client";
 import type { AgentOp } from "../../src/shared/types";
-import { otlpGateway } from "../../src/server/otlp-gateway";
+import type { OtlpGateway } from "../../src/server/otlp-gateway";
 import { testStore } from "../support/db";
+import { memoryTelemetry } from "../support/otel";
 
 let db: Database;
 let reset: () => Promise<void>;
@@ -27,10 +28,17 @@ const ops: AgentOps = {
   },
 };
 
+const mem = memoryTelemetry();
+const forwarded: { signal: string; body: Buffer; contentType: string; contentEncoding?: string }[] = [];
+let forwardStatus = 202;
+const gateway: OtlpGateway = {
+  forward: async (signal, body, { contentType, contentEncoding }) => (forwarded.push({ signal, body: Buffer.from(body), contentType, contentEncoding }), forwardStatus),
+};
+
 beforeAll(async () => {
   let store;
   ({ db, store, reset } = await testStore());
-  server = httpServer(new SwarmService(store), ops, otlpGateway(undefined)).listen(0);
+  server = httpServer(new SwarmService(store, mem.telemetry), ops, gateway, mem.telemetry).listen(0);
   await new Promise((r) => server.once("listening", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   client = new FolieClient(base);
@@ -154,5 +162,101 @@ describe("HTTP contract", () => {
   it("404s an unknown agent op and 405s a GET on a real one", async () => {
     expect((await raw("POST", "/v1/agents/a/explode")).status).toBe(404);
     expect((await raw("GET", "/v1/agents/a/suspend")).status).toBe(405);
+  });
+});
+
+describe("steering poll and transcript API", () => {
+  it("GET inbox?workItem= returns that work item's mail plus mail with none, and ?workItem=none only the latter", async () => {
+    const w1 = (await client.submitGoal({ goal: "one", to: "a" })).workItem;
+    const w2 = (await client.submitGoal({ goal: "two", to: "a" })).workItem;
+    await client.send({ from: "x", to: "a", body: "loose" });
+
+    expect((await client.inbox("a", { workItem: w1.id })).map((m) => m.body)).toEqual(["one", "loose"]);
+    expect((await client.inbox("a", { workItem: w2.id })).map((m) => m.body)).toEqual(["two", "loose"]);
+    expect((await client.inbox("a", { workItem: "none" })).map((m) => m.body)).toEqual(["loose"]);
+    expect(await client.inbox("a")).toHaveLength(3);
+  });
+
+  it.each(["workItem=abc", "workItem=1.5"])("400s a bad inbox scope %s", async (qs) => {
+    expect((await raw("GET", `/v1/agents/a/inbox?${qs}`)).status).toBe(400);
+  });
+
+  it("ingests transcript events idempotently and serves them back with filters", async () => {
+    const events = [
+      { seq: 0, type: "session_start" as const, data: {} },
+      { seq: 1, type: "artifact" as const, data: { path: "out/proof.txt", sha256: "ab" } },
+    ];
+    const batch = { agent: "a", sessionId: "s1", scope: "wi:1", events };
+    expect(await client.sessionEvents(batch)).toEqual({ stored: 2 });
+    expect(await client.sessionEvents(batch)).toEqual({ stored: 0 });
+
+    expect((await client.readEvents({ scope: "wi:1" })).map((e) => e.type)).toEqual(["session_start", "artifact"]);
+    expect((await client.readEvents({ type: "artifact" }))[0]!.data).toEqual({ path: "out/proof.txt", sha256: "ab" });
+  });
+
+  it("400s an invalid batch and a bad event filter", async () => {
+    expect((await raw("POST", "/v1/sessions/events", JSON.stringify({ agent: "a", sessionId: "s", scope: "wi:1", events: [] }))).status).toBe(400);
+    expect((await raw("GET", "/v1/sessions/events?type=dance")).status).toBe(400);
+    expect((await raw("GET", "/v1/sessions/events?after=x")).status).toBe(400);
+  });
+
+  it("serves earlier tool attempts for a scope, excluding the asking session", async () => {
+    const call = { callId: "1", tool: "message_send", replayable: false, args: { to: "b" } };
+    await client.sessionEvents({ agent: "a", sessionId: "old", scope: "wi:1", events: [{ seq: 0, type: "tool_start", data: call }] });
+    await client.sessionEvents({ agent: "a", sessionId: "cur", scope: "wi:1", events: [{ seq: 0, type: "tool_start", data: { ...call, callId: "9" } }] });
+
+    expect(await client.attempts("a", "wi:1", "cur")).toEqual([{ sessionId: "old", callId: "1", tool: "message_send", replayable: false, args: { to: "b" }, state: "interrupted" }]);
+    expect((await raw("GET", "/v1/sessions/attempts?agent=a&scope=bogus")).status).toBe(400);
+  });
+
+  it("makes a send with a requestId at-most-once over the wire", async () => {
+    const first = await client.send({ from: "a", to: "b", body: "x", requestId: "r1" });
+    const again = await client.send({ from: "a", to: "b", body: "x", requestId: "r1" });
+    expect(again).toMatchObject({ id: first.id, duplicate: true });
+    expect(await client.inbox("b")).toHaveLength(1);
+  });
+});
+
+describe("telemetry through HTTP", () => {
+  it("a request's traceparent makes its server span a child of the caller's span", async () => {
+    const parent = mem.telemetry.tracer.startSpan("caller");
+    const { traceId, spanId } = parent.spanContext();
+    await fetch(`${base}/v1/agents`, { headers: { traceparent: `00-${traceId}-${spanId}-01`, tracestate: "vendor=1" } });
+    parent.end();
+
+    const span = mem.named("folie.http.request").find((s) => s.parentSpanContext?.spanId === spanId)!;
+    expect(span.spanContext().traceId).toBe(traceId);
+    expect(span.attributes).toMatchObject({ "http.request.method": "GET", "url.path": "/v1/agents" });
+  });
+
+  it("starts a fresh trace for a malformed traceparent instead of rejecting the request", async () => {
+    const res = await fetch(`${base}/v1/agents`, { headers: { traceparent: "garbage" } });
+    expect(res.status).toBe(200);
+  });
+
+  it.each(["traces", "metrics", "logs"] as const)("forwards OTLP %s from a sandbox verbatim and answers with the collector's status", async (signal) => {
+    forwardStatus = 200;
+    const body = JSON.stringify({ resourceSpans: [] });
+    const res = await fetch(`${base}/v1/otlp/v1/${signal}`, { method: "POST", headers: { "content-type": "application/json", "content-encoding": "gzip" }, body });
+
+    expect(res.status).toBe(200);
+    const sent = forwarded.at(-1)!;
+    expect(sent).toMatchObject({ signal, contentType: "application/json", contentEncoding: "gzip" });
+    expect(sent.body.toString()).toBe(body);
+  });
+
+  it("passes the gateway's failure status through so the exporter can retry", async () => {
+    forwardStatus = 502;
+    expect((await fetch(`${base}/v1/otlp/v1/traces`, { method: "POST", body: "{}" })).status).toBe(502);
+  });
+
+  it("does not trace the OTLP pass-through itself", async () => {
+    const before = mem.named("folie.http.request").length;
+    await fetch(`${base}/v1/otlp/v1/traces`, { method: "POST", body: "{}" });
+    expect(mem.named("folie.http.request")).toHaveLength(before);
+  });
+
+  it("only accepts POST on the OTLP path", async () => {
+    expect((await raw("GET", "/v1/otlp/v1/traces")).status).toBe(404);
   });
 });

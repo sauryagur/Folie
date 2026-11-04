@@ -1,7 +1,10 @@
+import { context, trace } from "@opentelemetry/api";
 import { beforeEach, describe, expect, it } from "vitest";
 import { Controller, type ControllerConfig } from "../../src/server/controller";
 import { NotFoundError, ValidationError } from "../../src/server/errors";
 import { FakeAx, FakeEgress, silent } from "../support/fakes";
+import { memoryTelemetry } from "../support/otel";
+import { storableTrace } from "../../src/shared/trace";
 
 const cfg: ControllerConfig = {
   atespace: "folie",
@@ -17,9 +20,9 @@ class FakeAgents {
   idleByState = new Map<string, string[]>();
   idleQueries: [string, number][] = [];
   states = new Map<string, string>();
-  wakeDemand = async () => this.unread.map((name) => ({ name, traceparent: null, tracestate: null }));
-  retraced: string[] = [];
-  retrace = async (name: string) => void this.retraced.push(name);
+  traces = new Map<string, { traceparent: string | null; tracestate: string | null }>();
+  wakeDemand = async () => this.unread.map((name) => ({ name, ...(this.traces.get(name) ?? { traceparent: null, tracestate: null }) }));
+  retrace: (name: string, t: { traceparent: string | null; tracestate: string | null }) => Promise<void> = async () => {};
   idle = async (state: string, seconds: number) => (this.idleQueries.push([state, seconds]), this.idleByState.get(state) ?? []);
   setState = async (name: string, state: string) => void this.states.set(name, state);
   touched: string[] = [];
@@ -276,5 +279,64 @@ describe("idle sweep: retire", () => {
     await controller.reconcileOnce();
     expect(agents.states.get("good")).toBe("retired");
     expect(agents.states.has("bad")).toBe(false);
+  });
+});
+
+describe("wake tracing", () => {
+  const mem = memoryTelemetry();
+  const traced = () => new Controller(ax, egress, agents, cfg, silent, mem.telemetry);
+  const parentTrace = () => {
+    const span = mem.telemetry.tracer.startSpan("dispatch");
+    span.end();
+    return { span, ...storableTrace(trace.setSpan(context.active(), span)) };
+  };
+
+  it("runs wake and sandbox init as children of the span stored on the mail that woke the agent", async () => {
+    const { span, traceparent, tracestate } = parentTrace();
+    agents.unread = ["traced-1"];
+    agents.traces.set("traced-1", { traceparent, tracestate });
+    await traced().reconcileOnce();
+
+    const wake = mem.named("folie.controller.wake").find((s) => s.attributes.agent_name === "traced-1")!;
+    const init = mem.named("folie.sandbox.init").find((s) => s.attributes.agent_name === "traced-1")!;
+    expect(wake.parentSpanContext?.spanId).toBe(span.spanContext().spanId);
+    expect(wake.spanContext().traceId).toBe(span.spanContext().traceId);
+    expect(init.parentSpanContext?.spanId).toBe(wake.spanContext().spanId);
+  });
+
+  it("re-parents the agent's unread mail onto the init span BEFORE resuming, so the session it starts is the init span's child", async () => {
+    agents.unread = ["traced-2"];
+    let callsAtRetrace: string[] = [];
+    let retracedTo = "";
+    agents.retrace = async (_name, t) => {
+      callsAtRetrace = [...ax.calls];
+      retracedTo = t.traceparent ?? "";
+    };
+    await traced().reconcileOnce();
+
+    expect(callsAtRetrace).toEqual(["create traced-2", "egress folie/traced-2"]); // resume has not happened yet
+    const init = mem.named("folie.sandbox.init").find((s) => s.attributes.agent_name === "traced-2")!;
+    expect(retracedTo).toContain(init.spanContext().spanId);
+  });
+
+  it("does not trace agents that are already running: unread mail is seen on every pass while a session works", async () => {
+    await taskIn("busy", "Running");
+    agents.unread = ["busy"];
+    await traced().reconcileOnce();
+    await traced().reconcileOnce();
+
+    expect(mem.named("folie.controller.wake").filter((s) => s.attributes.agent_name === "busy")).toEqual([]);
+    expect(ax.calls).toEqual([]);
+  });
+
+  it("records an ax failure on the wake span, and the pass carries on", async () => {
+    agents.unread = ["broken"];
+    ax.createTask = async () => {
+      throw new Error("ax unavailable");
+    };
+    await traced().reconcileOnce();
+
+    const wake = mem.named("folie.controller.wake").find((s) => s.attributes.agent_name === "broken")!;
+    expect(wake.status).toMatchObject({ code: 2, message: "ax unavailable" });
   });
 });

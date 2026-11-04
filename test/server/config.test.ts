@@ -39,6 +39,12 @@ describe("loadConfig", () => {
     expect(c.substrate.ports).toEqual({ http: [80, 3000], tls: [443, 8443] });
   });
 
+  it("exports telemetry only when a collector endpoint is configured; an empty value counts as unset", () => {
+    expect(loadConfig(base).otlpEndpoint).toBeUndefined();
+    expect(loadConfig({ ...base, OTEL_EXPORTER_OTLP_ENDPOINT: "" }).otlpEndpoint).toBeUndefined();
+    expect(loadConfig({ ...base, OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel:4318" }).otlpEndpoint).toBe("http://otel:4318");
+  });
+
   it("defaults to a modest pool that suspends after a minute and retires after an hour", () => {
     const c = loadConfig(base);
     expect(c.maxAgents).toBe(8);
