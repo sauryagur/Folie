@@ -22,10 +22,18 @@ const commands: Record<string, Command> = {
   publish: viaServer(publish),
 };
 
-const [name = "", ...args] = process.argv.slice(2);
-const command = commands[name];
+const [name, ...args] = process.argv.slice(2);
+
+// `folie` with no arguments is the product: the interactive harness. The subcommands are the scripting surface.
+const tui: Command = () =>
+  withServerUrl(async (url) => {
+    const { runTui } = await import("./tui/run"); // lazy: only the TUI needs the native renderer
+    await runTui(new FolieClient(url));
+  });
+
+const command = name === undefined ? tui : commands[name];
 if (!command) {
-  console.error(`usage: folie <${Object.keys(commands).join("|")}>`);
+  console.error(`usage: folie [${Object.keys(commands).join("|")}]   (no arguments: open the TUI)`);
   process.exit(2);
 }
 try {

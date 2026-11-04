@@ -119,15 +119,21 @@ export interface FleetRow {
   line: string;
 }
 
+const nameWidth = (agents: AgentInfo[]) => Math.min(Math.max(...agents.map((a) => a.name.length), 5), 24);
+
+const columns = (name: string, state: string, mail: string, quiet: string, width: number) =>
+  `${name.padEnd(width)}  ${state.padEnd(9)} ${mail.padStart(4)} ${quiet.padStart(5)}`;
+
 export function fleetRows(agents: AgentInfo[], now: number): FleetRow[] {
-  const width = Math.min(Math.max(...agents.map((a) => a.name.length), 5), 24);
+  const width = nameWidth(agents);
   return agents.map((a) => ({
     name: a.name,
-    line: `${a.name.padEnd(width)}  ${activity(a).padEnd(9)} ${String(a.unread).padStart(2)}  ${ageLabel(a.lastActiveAt, now).padStart(4)}`,
+    line: columns(a.name, activity(a), String(a.unread), ageLabel(a.lastActiveAt, now), width),
   }));
 }
 
-export const FLEET_HEADER = "agent  state  mail  quiet";
+/** Header for the grid; the leading gutter matches the list's selection marker. */
+export const fleetHeader = (agents: AgentInfo[]) => `   ${columns("agent", "state", "mail", "quiet", nameWidth(agents))}`;
 
 const utcTime = (iso: string) => new Date(iso).toISOString().slice(11, 19);
 

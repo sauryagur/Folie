@@ -5,6 +5,7 @@ import {
   ageLabel,
   applyPoll,
   cycleView,
+  fleetHeader,
   fleetRows,
   formatMessage,
   initialState,
@@ -168,8 +169,20 @@ describe("formatting", () => {
   it("lays the fleet out in aligned columns", () => {
     const rows = fleetRows([agent("agent-1", { unread: 3 }), agent("a", { state: "suspended" })], NOW);
     expect(rows.map((r) => r.name)).toEqual(["agent-1", "a"]);
-    expect(rows[0]!.line).toBe("agent-1  working    3   30s");
-    expect(rows[1]!.line).toBe("a        suspended  0   30s");
+    expect(rows[0]!.line).toBe("agent-1  working      3   30s");
+    expect(rows[1]!.line).toBe("a        suspended    0   30s");
+  });
+
+  it("lines the header columns up with the rows, past the selection gutter", () => {
+    const agents = [agent("agent-1", { unread: 3 })];
+    const [row] = fleetRows(agents, NOW);
+    const header = fleetHeader(agents).slice(3); // the list draws a 3-cell marker before each row
+    for (const col of ["state", "mail", "quiet"]) {
+      expect(header.indexOf(col) + col.length).toBeGreaterThan(0);
+    }
+    expect(header.indexOf("state")).toBe(row!.line.indexOf("working"));
+    expect(header.indexOf("mail") + 4).toBe(row!.line.indexOf("3") + 1);
+    expect(header.length).toBe(row!.line.length);
   });
 
   it("formats a message with sender, recipient, topic and work item in UTC", () => {
