@@ -1,0 +1,91 @@
+# Folie's own Postgres: inboxes, topics, work items, sessions, audit log.
+# Only folie-server connects to it. Password lives in the folie-postgres Secret
+# (key: password), which `folie up` creates once with a random value.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: folie
+  labels:
+    # ate-system's NetworkPolicies admit Substrate API clients only from namespaces with this label.
+    ate.dev/api-access: "true"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: folie-postgres
+  namespace: folie
+  labels:
+    app.kubernetes.io/name: folie-postgres
+    app.kubernetes.io/part-of: folie
+spec:
+  replicas: 1
+  serviceName: folie-postgres
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: folie-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: folie-postgres
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          env:
+            - name: POSTGRES_USER
+              value: folie
+            - name: POSTGRES_DB
+              value: folie
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: folie-postgres
+                  key: password
+            # A subdirectory, because the volume root may contain lost+found.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+              name: postgres
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "folie", "-d", "folie"]
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: folie-postgres
+          app.kubernetes.io/part-of: folie
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: folie-postgres
+  namespace: folie
+  labels:
+    app.kubernetes.io/name: folie-postgres
+    app.kubernetes.io/part-of: folie
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+  selector:
+    app.kubernetes.io/name: folie-postgres

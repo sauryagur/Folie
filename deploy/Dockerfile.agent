@@ -1,0 +1,5 @@
+# Agent image: ax's stock runner (kept as entrypoint) plus the compiled folie agent program.
+# BASE_IMAGE is the digest-pinned ax-task-runner image the cluster's ax-server already uses.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY bin/folie-agent /usr/local/bin/folie-agent
