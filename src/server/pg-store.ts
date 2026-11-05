@@ -1,18 +1,20 @@
 import type {
   AgentInfo,
   BudgetRecord,
+  GoalEvaluation,
   Message,
   Report,
   SessionEvent,
   SessionEventType,
   SessionUsage,
   TaskRecord,
+  VerificationRecord,
   TopicInfo,
   WorkItem,
   WorkItemState,
 } from "../shared/types";
 import type { Database, Queryable, Row } from "./db";
-import type { AgentRepo, AuthRepo, BudgetRepo, EventRepo, ExecutionRegistryRepo, MessageRepo, Repos, ReportRepo, SessionRecord, SessionRepo, Store, StoredTrace, TaskRepo, TopicRepo, WorkItemRepo } from "./store";
+import type { AgentRepo, AuthRepo, BudgetRepo, EventRepo, ExecutionRegistryRepo, GoalEvaluationRepo, MessageRepo, Repos, ReportRepo, SessionRecord, SessionRepo, Store, StoredTrace, TaskRepo, TopicRepo, VerificationRepo, WorkItemRepo } from "./store";
 import { generateExecutionId, generateToken, hashToken } from "./auth";
 
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
@@ -626,6 +628,53 @@ const budgets = (q: Queryable): BudgetRepo => ({
     return toBudget(closed.rows[0]!);
   },
 });
+const VER_COLS = "id, task_id, check_name AS check, verifier, status, required, verdict, confidence";
+const toVer = (r: Row): VerificationRecord => ({
+  id: r.id as number,
+  taskId: r.task_id as number,
+  check: r.check as string,
+  verifier: r.verifier as string,
+  status: r.status as string,
+  required: Boolean(r.required),
+  verdict: (r.verdict as string | null) ?? null,
+  confidence: r.confidence === null || r.confidence === undefined ? null : Number(r.confidence),
+});
+const verifications = (q: Queryable): VerificationRepo => ({
+  async request({ taskId, check, verifier, required }) {
+    const { rows } = await q.query(
+      `INSERT INTO verifications (task_id, check_name, verifier, required) VALUES ($1,$2,$3,$4) RETURNING ${VER_COLS}`,
+      [taskId, check, verifier, required],
+    );
+    return toVer(rows[0]!);
+  },
+  async get(id) {
+    const { rows } = await q.query(`SELECT ${VER_COLS} FROM verifications WHERE id=$1`, [id]);
+    return rows[0] ? toVer(rows[0]) : null;
+  },
+  async recordVerdict({ verificationId, verdict, confidence, evidence }) {
+    const status = verdict === "pass" ? "passed" : verdict === "fail" ? "failed" : "errored";
+    const { rows } = await q.query(
+      `UPDATE verifications SET verdict=$2, confidence=$3, evidence=$4::jsonb, status=$5, decided_at=now()
+       WHERE id=$1 AND status='pending' RETURNING ${VER_COLS}`,
+      [verificationId, verdict, confidence, JSON.stringify(evidence), status],
+    );
+    return rows[0] ? toVer(rows[0]) : null;
+  },
+  async listForTask(taskId) {
+    const { rows } = await q.query(`SELECT ${VER_COLS} FROM verifications WHERE task_id=$1 ORDER BY id`, [taskId]);
+    return rows.map(toVer);
+  },
+});
+const goalEvaluations = (q: Queryable): GoalEvaluationRepo => ({
+  async record({ workItemId, verdict, caveats }) {
+    const { rows } = await q.query(
+      `INSERT INTO goal_evaluations (work_item_id, verdict, caveats) VALUES ($1,$2,$3::jsonb) RETURNING id, work_item_id, verdict, caveats, created_at`,
+      [workItemId, verdict, JSON.stringify(caveats)],
+    );
+    const r = rows[0]!;
+    return { workItemId: r.work_item_id as number, verdict: r.verdict as GoalEvaluation["verdict"], caveats: (typeof r.caveats === "string" ? JSON.parse(r.caveats) : r.caveats) as string[] };
+  },
+});
 
 const bind = (q: Queryable): Repos => ({
   messages: messages(q),
@@ -639,6 +688,8 @@ const bind = (q: Queryable): Repos => ({
   registry: registry(q),
   tasks: tasks(q),
   budgets: budgets(q),
+  verifications: verifications(q),
+  goalEvaluations: goalEvaluations(q),
 });
 
 export function pgStore(db: Database): Store {

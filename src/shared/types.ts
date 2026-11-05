@@ -161,6 +161,37 @@ export interface RecordUsageRequest {
 export interface CloseBudgetRequest {
   budgetId: number;
 }
+export interface VerificationRecord {
+  id: number;
+  taskId: number;
+  check: string;
+  verifier: string;
+  status: string;
+  required: boolean;
+  verdict: string | null;
+  confidence: number | null;
+}
+export interface RequestVerificationRequest {
+  taskId: number;
+  check: string;
+  verifier: string;
+  required?: boolean;
+}
+export interface RecordVerdictRequest {
+  verificationId: number;
+  verifier: string;
+  verdict: "pass" | "fail" | "inconclusive";
+  confidence: number;
+  evidence: string[];
+}
+export interface GoalEvaluation {
+  workItemId: number;
+  verdict: "achieved" | "partially" | "not_achieved" | "inconclusive";
+  caveats: string[];
+}
+export interface EvaluateGoalRequest {
+  workItemId: number;
+}
 
 /** Which mail a session may pick up mid-run: its own work item's, plus mail that belongs to no work item. */
 export interface InboxQuery {

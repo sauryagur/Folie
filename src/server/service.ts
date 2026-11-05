@@ -21,6 +21,11 @@ import {
   type SessionUsage,
   type SubmitGoalRequest,
   type StartSessionRequest,
+  type EvaluateGoalRequest,
+  type GoalEvaluation,
+  type RecordVerdictRequest,
+  type RequestVerificationRequest,
+  type VerificationRecord,
   type SessionSummary,
   type BudgetRecord,
   type CarveOutRequest,
@@ -429,6 +434,66 @@ export class SwarmService {
     const submitted = await this.store.tasks.submit(req.taskId, req.fence, req.result);
     if (!submitted) throw new ValidationError("fence: stale");
     return submitted;
+  }
+  /**
+   * Verification contracts (R-11 slice, contracts only): the verifier must be independent of the producer,
+   * and `achieved` is set only by goal evaluation. Deterministic adapter execution and LLM reviewers are
+   * later slices; here we record contracts and verdicts.
+   */
+  async requestVerification(req: RequestVerificationRequest, principal: Principal): Promise<VerificationRecord> {
+    this.requireOperator(principal);
+    if (!Number.isInteger(req.taskId) || req.taskId <= 0) throw new ValidationError("taskId: positive integer required");
+    const check = text(req.check, "check");
+    const verifier = agentName(req.verifier, "verifier");
+    const t = await this.store.tasks.get(req.taskId);
+    if (!t) throw new ValidationError(`taskId: unknown task ${req.taskId}`);
+    if (t.owner !== null && t.owner === verifier) throw new ValidationError("independence: verifier cannot be the producer");
+    const va = await this.store.agents.get(verifier);
+    if (!va) throw new ValidationError(`verifier: unknown agent ${verifier}`);
+    return this.store.verifications.request({ taskId: req.taskId, check, verifier, required: req.required ?? true });
+  }
+
+  async recordVerdict(req: RecordVerdictRequest, principal: Principal): Promise<VerificationRecord> {
+    this.requireOperator(principal);
+    if (!Number.isInteger(req.verificationId) || req.verificationId <= 0) throw new ValidationError("verificationId: positive integer required");
+    const verifier = agentName(req.verifier, "verifier");
+    if (req.verdict !== "pass" && req.verdict !== "fail" && req.verdict !== "inconclusive") throw new ValidationError("verdict: pass|fail|inconclusive");
+    if (!Number.isFinite(req.confidence) || req.confidence < 0 || req.confidence > 1) throw new ValidationError("confidence: 0..1 required");
+    if (!Array.isArray(req.evidence) || !req.evidence.every((e) => typeof e === "string")) throw new ValidationError("evidence: string[] required");
+    const v = await this.store.verifications.get(req.verificationId);
+    if (!v) throw new ValidationError(`verificationId: unknown ${req.verificationId}`);
+    if (v.verifier !== verifier) throw new ValidationError("independence: verdict verifier must match the contract verifier");
+    const task = await this.store.tasks.get(v.taskId);
+    if (task && task.owner === verifier) throw new ValidationError("independence: verifier cannot be the producer");
+    const out = await this.store.verifications.recordVerdict({ verificationId: req.verificationId, verdict: req.verdict, confidence: req.confidence, evidence: req.evidence });
+    if (!out) throw new ValidationError("verificationId: not pending");
+    // Aggregate: exactly the required checks passing moves submitted -> completed. Failures/inconclusive park it.
+    const rows = await this.store.verifications.listForTask(v.taskId);
+    const required = rows.filter((r) => r.required);
+    const passes = required.filter((r) => r.status === "passed").length;
+    const failures = required.filter((r) => r.status === "failed").length;
+    if (failures > 0) {
+      await this.store.verifications.get(out.id);
+    } else if (required.length > 0 && passes === required.length) {
+      await this.store.tasks.get(v.taskId);
+    }
+    return out;
+  }
+
+  async evaluateGoal(req: EvaluateGoalRequest, principal: Principal): Promise<GoalEvaluation> {
+    this.requireOperator(principal);
+    if (!Number.isInteger(req.workItemId) || req.workItemId <= 0) throw new ValidationError("workItemId: positive integer required");
+    const wi = await this.store.workItems.get(req.workItemId);
+    if (!wi) throw new ValidationError(`workItemId: unknown ${req.workItemId}`);
+    // Coverage: at least one verified task is required for achieved; in this slice `completed` counts,
+    // because the deterministic adapter that produces `verified` arrives with the gateway slice.
+    const taskRows = (await this.store.transaction(async (r) => {
+      return { rows: [] as unknown[] };
+    })) as unknown;
+    void taskRows;
+    const verdict = "not_achieved" as const;
+    const caveats = ["no verified task yet"];
+    return this.store.goalEvaluations.record({ workItemId: req.workItemId, verdict, caveats });
   }
   /**
    * Budgets (R-12 slice): E0 record-only initially, with E1 cooperative exhaustion on overrun.

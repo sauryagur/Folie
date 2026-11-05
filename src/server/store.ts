@@ -10,6 +10,8 @@ import type {
   SessionEvent,
   SessionEventInput,
   SessionUsage,
+  GoalEvaluation,
+  VerificationRecord,
   BudgetRecord,
   TaskRecord,
   TopicInfo,
@@ -83,6 +85,17 @@ export interface BudgetRepo {
   /** Close: return unspent to parent and mark closed. */
   close(budgetId: number): Promise<BudgetRecord | null>;
 }
+export interface VerificationRepo {
+  request(b: { taskId: number; check: string; verifier: string; required: boolean }): Promise<VerificationRecord>;
+  get(id: number): Promise<VerificationRecord | null>;
+  recordVerdict(b: { verificationId: number; verdict: string; confidence: number; evidence: string[] }): Promise<VerificationRecord | null>;
+  listForTask(taskId: number): Promise<VerificationRecord[]>;
+}
+
+export interface GoalEvaluationRepo {
+  record(b: { workItemId: number; verdict: string; caveats: string[] }): Promise<GoalEvaluation>;
+}
+
 
 
 export interface WorkItemRepo {
@@ -193,6 +206,8 @@ export interface Repos {
   registry: ExecutionRegistryRepo;
   tasks: TaskRepo;
   budgets: BudgetRepo;
+  verifications: VerificationRepo;
+  goalEvaluations: GoalEvaluationRepo;
 }
 
 export interface Store extends Repos {

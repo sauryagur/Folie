@@ -162,6 +162,19 @@ CREATE TABLE IF NOT EXISTS tasks (
   attempt     int NOT NULL DEFAULT 0,
   created_at  timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS verifications (
+  id          serial PRIMARY KEY,
+  task_id     int NOT NULL REFERENCES tasks(id),
+  check_name  text NOT NULL,
+  verifier    text NOT NULL REFERENCES agents(name),
+  status      text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','passed','failed','errored')),
+  required    boolean NOT NULL DEFAULT true,
+  verdict     text CHECK (verdict IN ('pass','fail','inconclusive')),
+  confidence  double precision,
+  evidence    jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  decided_at  timestamptz
+);
 CREATE INDEX IF NOT EXISTS tasks_available ON tasks (work_item_id, status, id) WHERE status IN ('proposed','available');
 CREATE TABLE IF NOT EXISTS task_claims (
   id          serial PRIMARY KEY,
@@ -177,6 +190,14 @@ CREATE TABLE IF NOT EXISTS task_claims (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS claims_one_active_owner ON task_claims (task_id) WHERE role = 'owner' AND state = 'active';
 CREATE INDEX IF NOT EXISTS claims_task ON task_claims (task_id, state);
+CREATE INDEX IF NOT EXISTS verifications_task ON verifications (task_id, status);
+CREATE TABLE IF NOT EXISTS goal_evaluations (
+  id          serial PRIMARY KEY,
+  work_item_id int NOT NULL REFERENCES work_items(id),
+  verdict     text NOT NULL CHECK (verdict IN ('achieved','partially','not_achieved','inconclusive')),
+  caveats     jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS session_id int REFERENCES sessions(id);
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS leased_at timestamptz;
 CREATE INDEX IF NOT EXISTS messages_leased ON messages (session_id) WHERE session_id IS NOT NULL;
