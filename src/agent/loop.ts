@@ -39,6 +39,8 @@ export class AgentLoop {
   private readonly flush: () => Promise<void>;
   /** A finished session's report the server has not accepted yet. Re-sent before any new work, never re-computed. */
   private undelivered: SubmitReportRequest | null = null;
+  /** The session currently running, if any. `cancelActive` aborts it; cleared when it settles. */
+  private activeSession: AbortController | null = null;
 
   constructor(
     private readonly name: string,
@@ -50,6 +52,17 @@ export class AgentLoop {
     this.out = deps.out ?? consoleOut;
     this.newSessionId = deps.newSessionId ?? randomUUID;
     this.flush = deps.flush ?? (async () => {});
+  }
+
+  /**
+   * Aborts the session currently running, if any; the runtime settles it with the cancel reason and partial
+   * usage. This is the hook the control watcher calls when a `cancel` arrives from
+   * `GET /v1/agents/:name/control`. Returns whether a session was running.
+   */
+  cancelActive(reason?: string): boolean {
+    if (!this.activeSession) return false;
+    this.activeSession.abort(reason ?? "cancelled");
+    return true;
   }
 
   /** Runs one session if mail is waiting. Returns whether anything ran. */
@@ -115,10 +128,13 @@ export class AgentLoop {
         ),
       },
     );
+    const controller = new AbortController();
+    this.activeSession = controller;
     const session: Session = {
       id: sessionId,
       scope,
       workItemId,
+      signal: controller.signal,
       events,
       tracer: this.tracer,
       log,
@@ -191,10 +207,14 @@ export class AgentLoop {
           );
         }
       },
-    );
+    ).finally(() => {
+      if (this.activeSession === controller) this.activeSession = null;
+    });
   }
 
   async run(pollMs: number, signal: AbortSignal): Promise<void> {
+    // Shutdown aborts the running session instead of orphaning it; tick semantics are unchanged.
+    signal.addEventListener("abort", () => this.cancelActive("stopping on shutdown"), { once: true });
     while (!signal.aborted) {
       let ran = false;
       try {

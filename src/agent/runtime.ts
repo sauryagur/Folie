@@ -27,9 +27,14 @@ export interface Session {
   takeNewMail(): Promise<Message[]>;
   events: EventSink;
   tracer: Tracer;
+  /**
+   * Abort channel for this session. The loop aborts it when a control `cancel` arrives (the watcher polls
+   * `GET /v1/agents/:name/control` and calls `AgentLoop.cancelActive`). A runtime must stop in-flight work,
+   * then settle with the cancel reason and the usage recorded so far. Always set by the loop.
+   */
+  signal?: AbortSignal;
   log: StructuredLogger;
 }
-
 export interface Runtime {
   /** One session over the initial `messages`. May throw: the loop reports that as a failed session. */
   run(messages: Message[], session: Session): Promise<SessionResult>;

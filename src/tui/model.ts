@@ -1,8 +1,8 @@
 // TUI state and its pure transitions. No terminal, no network: everything here is testable under Node.
-import type { AgentInfo, Message, Report, TopicInfo } from "../shared/types";
+import type { AgentInfo, Message, Report, SessionEvent, TopicInfo } from "../shared/types";
 
-export type View = "stream" | "inbox" | "topics" | "reports";
-export const VIEWS: readonly View[] = ["stream", "inbox", "topics", "reports"];
+export type View = "stream" | "inbox" | "topics" | "reports" | "inspector";
+export const VIEWS: readonly View[] = ["stream", "inbox", "topics", "reports", "inspector"];
 
 /** The stream keeps this many newest messages; older ones scroll out of memory, not out of the database. */
 export const STREAM_CAP = 500;
@@ -19,6 +19,8 @@ export interface TuiState {
   inbox: Message[];
   /** Recent reports of the selected agent (view "reports"). */
   reports: Report[];
+  /** Neutral session events of the selected agent (view "inspector"). */
+  sessionEvents: SessionEvent[];
   topics: TopicInfo[];
   /** Result of the last command, or the last poll failure. */
   status: string;
@@ -33,6 +35,7 @@ export const initialState = (): TuiState => ({
   cursor: 0,
   inbox: [],
   reports: [],
+  sessionEvents: [],
   topics: [],
   status: "connecting…",
   connected: false,
@@ -45,19 +48,23 @@ export interface PollResult {
   topics: TopicInfo[];
   inbox?: Message[];
   reports?: Report[];
-  /** The agent `inbox` and `reports` were read for. A poll in flight while the selection moved must not fill the new agent's panes. */
+  sessionEvents?: SessionEvent[];
   forAgent?: string | null;
 }
 
 export function applyPoll(s: TuiState, p: PollResult): TuiState {
-  const current = p.forAgent === undefined || p.forAgent === s.selected;
-  const known = new Set(s.stream.map((m) => m.id));
-  const fresh = p.messages.filter((m) => !known.has(m.id));
-  const stream = [...s.stream, ...fresh].slice(-STREAM_CAP);
   const selected =
     s.selected !== null && p.agents.some((a) => a.name === s.selected)
       ? s.selected
       : (p.agents[0]?.name ?? null);
+  const switched = selected !== s.selected;
+  const current = switched
+    ? p.forAgent === selected
+    : p.forAgent === undefined || p.forAgent === s.selected;
+  const known = new Set(s.stream.map((m) => m.id));
+  const fresh = p.messages.filter((m) => !known.has(m.id));
+  const stream = [...s.stream, ...fresh].slice(-STREAM_CAP);
+  const prev = <T,>(v: T): T => (switched ? ([] as T) : v);
   return {
     ...s,
     agents: p.agents,
@@ -65,8 +72,9 @@ export function applyPoll(s: TuiState, p: PollResult): TuiState {
     stream,
     cursor: stream.reduce((max, m) => Math.max(max, m.id), s.cursor),
     selected,
-    inbox: current ? (p.inbox ?? s.inbox) : s.inbox,
-    reports: current ? (p.reports ?? s.reports) : s.reports,
+    inbox: current ? (p.inbox ?? prev(s.inbox)) : prev(s.inbox),
+    reports: current ? (p.reports ?? prev(s.reports)) : prev(s.reports),
+    sessionEvents: current ? (p.sessionEvents ?? prev(s.sessionEvents)) : prev(s.sessionEvents),
     connected: true,
     status: s.connected ? s.status : "connected",
   };
@@ -90,13 +98,13 @@ export function moveSelection(s: TuiState, delta: number): TuiState {
     s.agents.findIndex((a) => a.name === s.selected),
   );
   const next = Math.min(Math.max(at + delta, 0), s.agents.length - 1);
-  return { ...s, selected: s.agents[next]!.name, inbox: [], reports: [] };
+  return { ...s, selected: s.agents[next]!.name, inbox: [], reports: [], sessionEvents: [] };
 }
 
 export function select(s: TuiState, name: string): TuiState {
   return s.selected === name
     ? s
-    : { ...s, selected: name, inbox: [], reports: [] };
+    : { ...s, selected: name, inbox: [], reports: [], sessionEvents: [] };
 }
 
 export function cycleView(s: TuiState, step = 1): TuiState {
@@ -178,6 +186,348 @@ export function formatTopic(t: TopicInfo): string {
   return `${t.topic}  ←  ${t.subscribers.join(", ")}`;
 }
 
+// --- inspector (session theatre) ---
+// Pure view-model over neutral SessionEvents. No OTel is read here: trace ids, durations and model
+// attributes all come from the event rows themselves, so a dropped span never changes what is shown.
+
+export interface InspectorStatus {
+  icon: string;
+  label: string;
+}
+export interface InspectorMessage {
+  role: string;
+  summary: string;
+  /** `gen_ai.*` / `folie.llm.*` attributes carried by this message, when present. */
+  model: Record<string, string>;
+}
+export interface InspectorTurn {
+  index: number;
+  startedAt: string | null;
+  endedAt: string | null;
+  status: InspectorStatus;
+  messages: InspectorMessage[];
+}
+export interface InspectorToolCall {
+  callId: string;
+  tool: string;
+  startId: number;
+  endId: number | null;
+  startedAt: string | null;
+  durationMs: number | null;
+  replayable: boolean | null;
+  risk: string | null;
+  costUsd: number | null;
+  isError: boolean;
+  status: InspectorStatus;
+}
+export interface InspectorSteer {
+  id: number;
+  at: string | null;
+  messageIds: number[];
+}
+export interface InspectorArtifact {
+  id: number;
+  at: string | null;
+  path: string;
+  bytes: number | null;
+  sha256: string | null;
+  description: string | null;
+}
+export interface InspectorLog {
+  id: number;
+  at: string | null;
+  level: string;
+  line: string;
+}
+export interface InspectorModel {
+  agent: string | null;
+  sessionId: string | null;
+  scope: string | null;
+  eventCount: number;
+  traceId: string | null;
+  status: InspectorStatus;
+  turns: InspectorTurn[];
+  tools: InspectorToolCall[];
+  steering: InspectorSteer[];
+  artifacts: InspectorArtifact[];
+  logs: InspectorLog[];
+  totalCostUsd: number | null;
+}
+/** Cancel is never a button: the model only ever produces an unconfirmed, command-only intent. */
+export interface CancelSessionCommand {
+  kind: "cancel-session";
+  agent: string | null;
+  sessionId: string | null;
+  confirmed: boolean;
+  via: "command-only";
+}
+export interface OpenTrace {
+  kind: "open-trace";
+  traceId: string;
+}
+
+const ok = (label: string): InspectorStatus => ({ icon: "✓", label });
+const bad = (label: string): InspectorStatus => ({ icon: "✗", label });
+const live = (label: string): InspectorStatus => ({ icon: "●", label });
+const unknown = (label: string): InspectorStatus => ({ icon: "?", label });
+
+const dstr = (d: Record<string, unknown>, k: string) =>
+  typeof d[k] === "string" ? (d[k] as string) : null;
+const dnum = (d: Record<string, unknown>, k: string) =>
+  typeof d[k] === "number" && Number.isFinite(d[k] as number) ? (d[k] as number) : null;
+const dbool = (d: Record<string, unknown>, k: string) =>
+  typeof d[k] === "boolean" ? (d[k] as boolean) : null;
+
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content.replace(/\s+/g, " ").trim();
+  if (content && typeof content === "object") {
+    const o = content as Record<string, unknown>;
+    if (typeof o.text === "string") return o.text.replace(/\s+/g, " ").trim();
+    if (Array.isArray(o.content)) {
+      const text = o.content
+        .filter((c): c is { text: string } => !!c && typeof c === "object" && typeof (c as { text?: unknown }).text === "string")
+        .map((c) => c.text)
+        .join(" ");
+      return text.replace(/\s+/g, " ").trim();
+    }
+  }
+  return "";
+}
+
+/** Attributes a message event carries, from its own data plus its nested assistant message. */
+function modelAttributes(data: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(data)) {
+    if ((k.startsWith("gen_ai.") || k.startsWith("folie.llm.")) && (typeof v === "string" || typeof v === "number" || typeof v === "boolean")) {
+      out[k] = String(v);
+    }
+  }
+  const content = data.content;
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const c = content as Record<string, unknown>;
+    const provider = dstr(c, "provider");
+    if (provider) out["gen_ai.provider.name"] = provider;
+    const model = dstr(c, "model");
+    if (model) {
+      out["gen_ai.request.model"] = model;
+      out["gen_ai.response.model"] = model;
+    }
+    const usage = c.usage;
+    if (usage && typeof usage === "object" && !Array.isArray(usage)) {
+      const u = usage as Record<string, unknown>;
+      const input = dnum(u, "input");
+      const output = dnum(u, "output");
+      if (input !== null) out["gen_ai.usage.input_tokens"] = String(input);
+      if (output !== null) out["gen_ai.usage.output_tokens"] = String(output);
+      const cost = u.cost;
+      if (cost && typeof cost === "object" && !Array.isArray(cost)) {
+        const total = dnum(cost as Record<string, unknown>, "total");
+        if (total !== null) out["folie.llm.cost_usd"] = String(total);
+      } else {
+        const total = dnum(u, "costUsd") ?? dnum(u, "cost_usd");
+        if (total !== null) out["folie.llm.cost_usd"] = String(total);
+      }
+    }
+  }
+  return out;
+}
+
+export function buildInspector(agent: string | null, events: SessionEvent[]): InspectorModel {
+  const sorted = [...events].sort((a, b) => a.id - b.id || a.seq - b.seq);
+  const traceId = sorted.find((e) => e.traceId !== null)?.traceId ?? null;
+  const last = sorted.at(-1);
+  const turns: InspectorTurn[] = [];
+  const tools: InspectorToolCall[] = [];
+  const byCall = new Map<string, InspectorToolCall>();
+  let current: InspectorTurn | null = null;
+  const turn = () => {
+    if (!current) {
+      current = { index: turns.length + 1, startedAt: null, endedAt: null, status: live("running"), messages: [] };
+      turns.push(current);
+    }
+    return current;
+  };
+  for (const e of sorted) {
+    const d = e.data ?? {};
+    switch (e.type) {
+      case "turn_start":
+        current = { index: turns.length + 1, startedAt: e.createdAt, endedAt: null, status: live("running"), messages: [] };
+        turns.push(current);
+        break;
+      case "turn_end":
+        if (current) {
+          current.endedAt = e.createdAt;
+          current.status = ok("done");
+        }
+        current = null;
+        break;
+      case "message": {
+        const m: InspectorMessage = {
+          role: dstr(d, "role") ?? "message",
+          summary: messageText(d.content).slice(0, 120),
+          model: modelAttributes(d),
+        };
+        turn().messages.push(m);
+        break;
+      }
+      case "tool_start": {
+        const callId = dstr(d, "callId") ?? `call-${e.seq}`;
+        const call: InspectorToolCall = {
+          callId,
+          tool: dstr(d, "tool") ?? "(unknown tool)",
+          startId: e.id,
+          endId: null,
+          startedAt: e.createdAt,
+          durationMs: null,
+          replayable: dbool(d, "replayable"),
+          risk: dstr(d, "risk") ?? dstr(d, "folie.tool.risk") ?? dstr(d, "tool.risk"),
+          costUsd: dnum(d, "costUsd") ?? dnum(d, "cost_usd"),
+          isError: false,
+          status: unknown("interrupted"),
+        };
+        tools.push(call);
+        byCall.set(`${e.sessionId}:${callId}`, call);
+        break;
+      }
+      case "tool_end": {
+        const callId = dstr(d, "callId") ?? `call-${e.seq}`;
+        let call = byCall.get(`${e.sessionId}:${callId}`);
+        if (!call) {
+          call = {
+            callId,
+            tool: dstr(d, "tool") ?? "(unknown tool)",
+            startId: e.id,
+            endId: null,
+            startedAt: null,
+            durationMs: null,
+            replayable: dbool(d, "replayable"),
+            risk: dstr(d, "risk") ?? dstr(d, "folie.tool.risk") ?? dstr(d, "tool.risk"),
+            costUsd: dnum(d, "costUsd") ?? dnum(d, "cost_usd"),
+            isError: false,
+            status: unknown("interrupted"),
+          };
+          tools.push(call);
+          byCall.set(`${e.sessionId}:${callId}`, call);
+        }
+        call.endId = e.id;
+        call.durationMs = dnum(d, "durationMs") ?? dnum(d, "duration_ms");
+        if (dbool(d, "replayable") !== null) call.replayable = dbool(d, "replayable");
+        call.risk = dstr(d, "risk") ?? dstr(d, "folie.tool.risk") ?? dstr(d, "tool.risk") ?? call.risk;
+        call.costUsd = dnum(d, "costUsd") ?? dnum(d, "cost_usd") ?? call.costUsd;
+        call.isError = dbool(d, "isError") ?? false;
+        call.status = call.isError ? bad("failed") : ok("done");
+        break;
+      }
+    }
+  }
+  const steering: InspectorSteer[] = [];
+  const artifacts: InspectorArtifact[] = [];
+  const logs: InspectorLog[] = [];
+  let totalCost = 0;
+  let hasCost = false;
+  let outcome: string | null = null;
+  for (const e of sorted) {
+    const d = e.data ?? {};
+    if (e.type === "steer") {
+      const ids = Array.isArray(d.messageIds)
+        ? d.messageIds.filter((n): n is number => typeof n === "number")
+        : [];
+      steering.push({ id: e.id, at: e.createdAt, messageIds: ids });
+    } else if (e.type === "artifact") {
+      artifacts.push({
+        id: e.id,
+        at: e.createdAt,
+        path: dstr(d, "path") ?? "(unknown path)",
+        bytes: dnum(d, "bytes"),
+        sha256: dstr(d, "sha256"),
+        description: dstr(d, "description"),
+      });
+    } else if (e.type === "log") {
+      logs.push({ id: e.id, at: e.createdAt, level: dstr(d, "level") ?? "info", line: dstr(d, "line") ?? "" });
+    } else if (e.type === "session_end") {
+      outcome = dstr(d, "outcome");
+    } else if (e.type === "message") {
+      const cost = Number(modelAttributes(d)["folie.llm.cost_usd"]);
+      if (Number.isFinite(cost)) {
+        totalCost += cost;
+        hasCost = true;
+      }
+    }
+  }
+  // Least surprising: a started call with no end is an interruption, and waterfall order is start order.
+  tools.sort((a, b) => a.startId - b.startId);
+  const status =
+    outcome === "done" ? ok("done") : outcome === "failed" ? bad("failed") : sorted.length ? live("running") : unknown("no session");
+  return {
+    agent,
+    sessionId: last?.sessionId ?? null,
+    scope: last?.scope ?? null,
+    eventCount: sorted.length,
+    traceId,
+    status,
+    turns,
+    tools,
+    steering,
+    artifacts,
+    logs,
+    totalCostUsd: hasCost ? totalCost : null,
+  };
+}
+
+/** The exact string a user copies to open the trace; null when no event carries one yet. */
+export const copyTraceId = (i: InspectorModel): string | null => i.traceId;
+export const openTrace = (i: InspectorModel): OpenTrace | null => (i.traceId ? { kind: "open-trace", traceId: i.traceId } : null);
+export const requestCancelSession = (i: InspectorModel, confirmed = false): CancelSessionCommand => ({
+  kind: "cancel-session",
+  agent: i.agent,
+  sessionId: i.sessionId,
+  confirmed,
+  via: "command-only",
+});
+export const confirmCancelSession = (cmd: CancelSessionCommand): CancelSessionCommand =>
+  cmd.confirmed ? cmd : { ...cmd, confirmed: true };
+export const cancelPrompt = (cmd: CancelSessionCommand) =>
+  cmd.agent && cmd.sessionId
+    ? `cancel session ${cmd.agent}/${cmd.sessionId}? type 'cancel session confirm' (command-only)`
+    : "cancel session: no session loaded";
+
+/** Every line carries an icon plus the words next to it, so status never rests on colour alone. */
+export function inspectorLines(i: InspectorModel): string[] {
+  const who = i.agent ?? "(no agent)";
+  if (!i.eventCount) return [`? ${who}: no session events yet — select an agent with a running session`];
+  const lines: string[] = [];
+  lines.push(
+    `${i.status.icon} session ${i.sessionId ?? "-"}  agent=${who}  scope=${i.scope ?? "-"}  ${i.status.label}  events=${i.eventCount}  cost=${i.totalCostUsd === null ? "unknown" : `$${i.totalCostUsd.toFixed(4)}`}`,
+  );
+  lines.push(i.traceId ? `⎙ trace_id: ${i.traceId} (copy)  → open trace: ${i.traceId}` : "? trace_id: none yet  → open trace: unavailable");
+  lines.push(`turns (${i.turns.length})`);
+  for (const t of i.turns) {
+    lines.push(`  ${t.status.icon} turn ${t.index} ${t.status.label} ${t.startedAt ? utcTime(t.startedAt) : "?"}-${t.endedAt ? utcTime(t.endedAt) : "?"}`);
+    for (const m of t.messages) {
+      const attrs = Object.entries(m.model)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(" ");
+      lines.push(`    ${m.role}: ${m.summary || "(no text)"}${attrs ? `  [${attrs}]` : "  [model: unknown]"}`);
+    }
+  }
+  lines.push(`tool waterfall (${i.tools.length})`);
+  for (const t of i.tools) {
+    const replay = t.replayable === null ? "unknown" : t.replayable ? "safe" : "never";
+    lines.push(
+      `  ${t.status.icon} ${t.tool}  call=${t.callId}  dur=${t.durationMs === null ? "unknown" : `${t.durationMs}ms`}  replay=${replay}  risk=${t.risk ?? "unknown"}  cost=${t.costUsd === null ? "unknown" : `$${t.costUsd.toFixed(4)}`}  ${t.status.label}`,
+    );
+  }
+  lines.push(`steering (${i.steering.length})`);
+  for (const s of i.steering) lines.push(`  → steer: messages ${s.messageIds.length ? s.messageIds.map((id) => `#${id}`).join(", ") : "none"}`);
+  lines.push(`artifacts (${i.artifacts.length})`);
+  for (const a of i.artifacts) {
+    lines.push(`  ▣ artifact: ${a.path}  bytes=${a.bytes ?? "unknown"}  sha=${a.sha256 ? a.sha256.slice(0, 12) : "unknown"}${a.description ? `  ${a.description}` : ""}`);
+  }
+  for (const l of i.logs.slice(-8)) lines.push(`  ${l.level === "error" ? "✗" : "●"} log: ${l.line}`);
+  lines.push("actions: [c] copy trace_id · [t] open trace · cancel session: `cancel session` (command-only, confirm required)");
+  return lines;
+}
+
 /** The body of the right-hand pane for the active view. */
 export function paneLines(s: TuiState): string[] {
   const who = s.selected ?? "(no agent)";
@@ -195,9 +545,9 @@ export function paneLines(s: TuiState): string[] {
         ? s.reports.map(formatReport)
         : [`${who}: no reports yet`];
     case "topics":
-      return s.topics.length
-        ? s.topics.map(formatTopic)
-        : ["No topics yet. Try: subscribe <topic> [agent]"];
+      return s.topics.length ? s.topics.map(formatTopic) : ["No topics yet. Try: subscribe <topic> [agent]"];
+    case "inspector":
+      return inspectorLines(buildInspector(s.selected, s.sessionEvents));
   }
 }
 
@@ -207,4 +557,5 @@ export const paneTitle = (s: TuiState) =>
     inbox: `inbox: ${s.selected ?? "-"}`,
     reports: `reports: ${s.selected ?? "-"}`,
     topics: "topics",
+    inspector: `inspector: ${s.selected ?? "-"}`
   })[s.view];

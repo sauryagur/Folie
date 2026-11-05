@@ -232,7 +232,8 @@ export class PiRuntime implements Runtime {
     )) {
       const tool = tools.find((t) => t.name === a.tool);
       if (!tool) continue;
-      await tool.execute(`replay-${a.callId}`, a.args as never);
+      if (session.signal?.aborted) break; // cancelled before restoring: start nothing new
+      await tool.execute(`replay-${a.callId}`, a.args as never, session.signal);
       restored.push(`${a.tool} ${JSON.stringify(a.args)}`);
     }
 
@@ -268,6 +269,12 @@ export class PiRuntime implements Runtime {
       steeringMode: "all",
       finishTurn: steer,
     });
+
+    // Cooperative cancellation: the session's abort signal (control `cancel`) aborts pi's run, which stops
+    // the in-flight model request and the running tool; the run then settles with partial usage below.
+    // Tool calls under pi see this abort through pi's own run signal.
+    const onSessionAbort = () => agent.abort();
+    session.signal?.addEventListener("abort", onSessionAbort, { once: true });
 
     agent.subscribe(async (event) => {
       switch (event.type) {
@@ -314,18 +321,23 @@ export class PiRuntime implements Runtime {
         : "",
     ].filter(Boolean);
     try {
-      await agent.prompt(
-        [
-          ...notice,
-          formatMail(
-            `You have ${messages.length} unread message(s):`,
-            messages,
-          ),
-        ].join("\n\n"),
-      );
-      await agent.waitForIdle();
+      if (!session.signal?.aborted) {
+        await agent.prompt(
+          [
+            ...notice,
+            formatMail(
+              `You have ${messages.length} unread message(s):`,
+              messages,
+            ),
+          ].join("\n\n"),
+        );
+        await agent.waitForIdle();
+      }
+    } catch (e) {
+      if (!session.signal?.aborted) throw e; // an abort that raced the prompt settles as cancelled below
     } finally {
       turnSpan?.end(); // an aborted run never reaches turn_end
+      session.signal?.removeEventListener("abort", onSessionAbort);
     }
 
     const usage = {
@@ -335,6 +347,11 @@ export class PiRuntime implements Runtime {
       toolCalls: stats.toolCalls,
       toolFailures: stats.toolFailures,
     };
+    if (session.signal?.aborted) {
+      const reason = session.signal.reason;
+      const why = typeof reason === "string" && reason ? `: ${reason}` : "";
+      return { outcome: "failed", summary: `cancelled${why}`, usage };
+    }
     if (report.value) return { ...report.value, usage };
     const last = agent.state.messages.at(-1);
     if (last?.role === "assistant" && last.stopReason === "error") {

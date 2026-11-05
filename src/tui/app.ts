@@ -15,12 +15,17 @@ import {
   fleetHeader as fleetHeaderText,
   VIEWS,
   applyPoll,
+  buildInspector,
+  cancelPrompt,
+  confirmCancelSession,
   cycleView,
   fleetRows,
   initialState,
+  openTrace,
   paneLines,
   paneTitle,
   pollFailed,
+  requestCancelSession,
   select,
   setView,
   withStatus,
@@ -28,9 +33,10 @@ import {
   type View,
 } from "./model";
 import { poll, type PollApi } from "./poller";
+import type { FolieClient } from "../shared/client";
 
 export interface AppDeps {
-  api: PollApi & CommandApi;
+  api: PollApi & CommandApi & Partial<Pick<FolieClient, "readEvents">>;
   /** Called when the user quits. The caller owns terminal teardown. */
   onQuit: () => void;
   intervalMs?: number;
@@ -173,7 +179,12 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
     if (inFlight) return;
     inFlight = true;
     try {
-      state = applyPoll(state, await poll(deps.api, state));
+      let result = await poll(deps.api, state);
+      if (state.view === "inspector" && state.selected !== null && typeof deps.api.readEvents === "function") {
+        const sessionEvents = await deps.api.readEvents({ agent: state.selected, limit: 1000 });
+        result = { ...result, sessionEvents, forAgent: state.selected };
+      }
+      state = applyPoll(state, result);
     } catch (e) {
       state = pollFailed(state, e);
     } finally {
@@ -189,6 +200,16 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
   }
 
   async function runCommand(text: string) {
+    if (/^:?\s*cancel\s+session\b/.test(text)) {
+      const inspector = buildInspector(state.selected, state.sessionEvents);
+      const confirmed = /\bconfirm\b/.test(text);
+      const cmd = confirmCancelSession(requestCancelSession(inspector, confirmed));
+      if (!cmd.sessionId) state = withStatus(state, "cancel session: no session loaded");
+      else if (!cmd.confirmed) state = withStatus(state, cancelPrompt(cmd));
+      else state = withStatus(state, `cancel session confirmed (command-only) for ${cmd.agent}/${cmd.sessionId}: queueCancel has no HTTP route yet, so nothing was executed`);
+      draw();
+      return;
+    }
     const cmd = parseCommand(text, state.selected);
     switch (cmd.kind) {
       case "error":
@@ -258,13 +279,25 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
         return deps.onQuit();
       case "i":
         key.preventDefault();
-        return focusInput(true);
+        return showView("inspector");
+      case "c":
+        if (state.view === "inspector") {
+          const t = openTrace(buildInspector(state.selected, state.sessionEvents));
+          state = withStatus(state, t ? `⎙ trace_id: ${t.traceId} (copyable — open trace: trace ${t.traceId})` : "? trace_id: none yet");
+          draw();
+        }
+        return;
+      case "t":
+        if (state.view === "inspector") {
+          const t = openTrace(buildInspector(state.selected, state.sessionEvents));
+          state = withStatus(state, t ? `→ open trace: trace ${t.traceId}` : "? trace_id: none yet");
+          draw();
+        }
+        return;
       case "s":
       case "r":
         if (state.selected)
-          void runCommand(
-            `${key.name === "s" ? "suspend" : "resume"} ${state.selected}`,
-          );
+          void runCommand(`${key.name === "s" ? "suspend" : "resume"} ${state.selected}`);
         return;
     }
     if (key.sequence === ":" || key.sequence === "/") {

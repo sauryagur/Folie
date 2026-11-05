@@ -198,8 +198,8 @@ describe("selection and views", () => {
     expect(s.view).toBe("stream");
     s = cycleView(s);
     expect(s.view).toBe("inbox");
-    expect(cycleView(cycleView(cycleView(s))).view).toBe("stream");
-    expect(cycleView(initialState(), -1).view).toBe("reports");
+    expect(cycleView(cycleView(cycleView(cycleView(s)))).view).toBe("stream");
+    expect(cycleView(initialState(), -1).view).toBe("inspector");
   });
 });
 
