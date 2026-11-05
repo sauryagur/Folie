@@ -13,6 +13,8 @@ let store: Store;
 let reset: () => Promise<void>;
 const mem = memoryTelemetry();
 let service: SwarmService;
+const op = { kind: 'operator', name: 'operator' } as const;
+const asAgent = (name: string) => ({ kind: 'agent', name, generation: 1, executionId: 'test-exec' }) as const;
 beforeAll(async () => {
   ({ db, store, reset } = await testStore());
   service = new SwarmService(store, mem.telemetry);
@@ -44,17 +46,17 @@ describe("ingestEvents validation", () => {
     ["oversized data", batch([ev(0, "log", { line: "x".repeat(70_000) })])],
     ["bad agent name", batch(ok, { agent: "Not Valid" })],
   ])("rejects %s", async (_name, b) => {
-    await expect(service.ingestEvents(b)).rejects.toThrow(ValidationError);
+    await expect(service.ingestEvents(b, asAgent(b.agent))).rejects.toThrow(ValidationError);
   });
 
   it("accepts the artifact type", async () => {
-    await expect(service.ingestEvents(batch([ev(0, "artifact", { path: "p" })]))).resolves.toEqual({ stored: 1 });
+    await expect(service.ingestEvents(batch([ev(0, "artifact", { path: "p" })]), asAgent("a"))).resolves.toEqual({ stored: 1 });
   });
 
   it("validates event queries", async () => {
-    await expect(service.events({ type: "dance" as SessionEventInput["type"] })).rejects.toThrow(ValidationError);
-    await expect(service.events({ scope: "x" })).rejects.toThrow(ValidationError);
-    await expect(service.events({ after: -1 })).rejects.toThrow(ValidationError);
+    await expect(service.events({ type: "dance" as SessionEventInput["type"] }, op)).rejects.toThrow(ValidationError);
+    await expect(service.events({ scope: "x" }, op)).rejects.toThrow(ValidationError);
+    await expect(service.events({ after: -1 }, op)).rejects.toThrow(ValidationError);
   });
 });
 
@@ -65,8 +67,8 @@ describe("tool metrics from the transcript", () => {
       ev(1, "tool_end", { callId: "1", tool: "message_send", replayable: false, isError: false }),
       ev(2, "tool_end", { callId: "2", tool: "message_send", replayable: false, isError: true }),
     ], { agent: "counted" });
-    await service.ingestEvents(b);
-    await service.ingestEvents(b);
+    await service.ingestEvents(b, asAgent(b.agent));
+    await service.ingestEvents(b, asAgent(b.agent));
 
     const m = await mem.metrics();
     expect(m["folie.tool.calls{agent_name=counted,tool.name=message_send,tool.replayable=false}"]).toBe(2);
@@ -84,9 +86,9 @@ describe("attempts: what an earlier session did", () => {
       start(2, "2", "bash", false), end(3, "2", true),
       start(4, "3", "message_send", false, { to: "carol" }),
       start(5, "4", "topic_subscribe", true),
-    ], { sessionId: "old" }));
+    ], { sessionId: "old" }), asAgent("a"));
 
-    const attempts = await service.attempts("a", "wi:1");
+    const attempts = await service.attempts("a", "wi:1", undefined, asAgent("a"));
     expect(attempts.map((x) => [x.callId, x.tool, x.replayable, x.state])).toEqual([
       ["1", "message_send", false, "done"],
       ["2", "bash", false, "failed"],
@@ -97,17 +99,17 @@ describe("attempts: what an earlier session did", () => {
   });
 
   it("keeps sessions apart (call ids repeat across sessions) and can leave the current one out", async () => {
-    await service.ingestEvents(batch([start(0, "1", "write", false), end(1, "1")], { sessionId: "one" }));
-    await service.ingestEvents(batch([start(0, "1", "write", false)], { sessionId: "two" }));
+    await service.ingestEvents(batch([start(0, "1", "write", false), end(1, "1")], { sessionId: "one" }), asAgent("a"));
+    await service.ingestEvents(batch([start(0, "1", "write", false)], { sessionId: "two" }), asAgent("a"));
 
-    expect((await service.attempts("a", "wi:1")).map((x) => [x.sessionId, x.state])).toEqual([["one", "done"], ["two", "interrupted"]]);
-    expect((await service.attempts("a", "wi:1", "two")).map((x) => x.sessionId)).toEqual(["one"]);
+    expect((await service.attempts("a", "wi:1", undefined, asAgent("a"))).map((x) => [x.sessionId, x.state])).toEqual([["one", "done"], ["two", "interrupted"]]);
+    expect((await service.attempts("a", "wi:1", "two", asAgent("a"))).map((x) => x.sessionId)).toEqual(["one"]);
   });
 
   it("is empty for a scope nothing ran at, and validates its inputs", async () => {
-    expect(await service.attempts("a", "wi:99")).toEqual([]);
-    await expect(service.attempts("a", "bogus")).rejects.toThrow(ValidationError);
-    await expect(service.attempts("NOPE", "wi:1")).rejects.toThrow(ValidationError);
+    expect(await service.attempts("a", "wi:99", undefined, asAgent("a"))).toEqual([]);
+    await expect(service.attempts("a", "bogus", undefined, asAgent("a"))).rejects.toThrow(ValidationError);
+    await expect(service.attempts("NOPE", "wi:1", undefined, asAgent("NOPE"))).rejects.toThrow(ValidationError);
   });
 });
 
@@ -120,7 +122,7 @@ describe("report usage and settlement spans", () => {
   };
 
   it("stores usage and puts it on the settlement span as llm.usage.* attributes", async () => {
-    const r = await service.submitReport(await report({ usage }, "usage-ok"));
+    const r = await service.submitReport(await report({ usage }, "usage-ok"), asAgent("usage-ok"));
     expect(r.usage).toEqual(usage);
     const span = mem.named("folie.report.settle").find((s) => s.attributes.agent_name === "usage-ok")!;
     expect(span.attributes).toMatchObject({
@@ -140,15 +142,16 @@ describe("report usage and settlement spans", () => {
     ["missing field", { promptTokens: 1 }],
     ["a string", "lots"],
   ])("rejects usage with %s", async (_n, bad) => {
-    await expect(service.submitReport(await report({ usage: bad }))).rejects.toThrow(ValidationError);
+    await expect(service.submitReport(await report({ usage: bad }), asAgent("u"))).rejects.toThrow(ValidationError);
   });
 
   it("marks the settlement span failed and parks the work item when the session failed", async () => {
-    const { workItem } = await service.submitGoal({ goal: "g", to: "failing" });
+    await service.registerAgent("failing");
+    const { workItem } = await service.submitGoal({ goal: "g", to: "failing" }, op);
     const [m] = await store.messages.unacked("failing");
-    await service.submitReport({ agent: "failing", startedAt: new Date().toISOString(), outcome: "failed", summary: "API blocked", messageIds: [m!.id] });
+    await service.submitReport({ agent: "failing", startedAt: new Date().toISOString(), outcome: "failed", summary: "API blocked", messageIds: [m!.id] }, asAgent("failing"));
 
-    expect((await service.workItem(workItem.id)).workItem.state).toBe("blocked");
+    expect((await service.workItem(workItem.id, op)).workItem.state).toBe("blocked");
     const span = mem.named("folie.report.settle").find((s) => s.attributes.agent_name === "failing")!;
     expect(span.status).toMatchObject({ code: 2, message: "API blocked" });
     expect(span.attributes["folie.work_item.parked"]).toBe(true);
@@ -160,34 +163,35 @@ describe("report usage and settlement spans", () => {
     const initial = await store.messages.send({ from: "h", to: "multi", body: "goal", workItemId: w.id });
     const injected = await store.messages.send({ from: "h", to: "multi", body: "mid-session correction" });
 
-    await service.submitReport({ agent: "multi", startedAt: new Date().toISOString(), outcome: "done", summary: "s", messageIds: [initial.id, injected.id] });
+    await service.submitReport({ agent: "multi", startedAt: new Date().toISOString(), outcome: "done", summary: "s", messageIds: [initial.id, injected.id] }, asAgent("multi"));
 
     expect(await store.messages.unacked("multi")).toEqual([]);
-    expect((await service.workItem(w.id)).workItem.state).toBe("done");
+    expect((await service.workItem(w.id, op)).workItem.state).toBe("done");
   });
 });
 
 describe("request id and intent validation", () => {
   it.each(["", "x".repeat(201), 7 as unknown as string])("rejects requestId %j", async (requestId) => {
-    await expect(service.send({ from: "a", to: "b", body: "x", requestId })).rejects.toThrow(ValidationError);
-    await expect(service.publish("t", { from: "a", body: "x", requestId })).rejects.toThrow(ValidationError);
+    await expect(service.send({ from: "a", to: "b", body: "x", requestId }, asAgent("a"))).rejects.toThrow(ValidationError);
+    await expect(service.publish("t", { from: "a", body: "x", requestId }, asAgent("a"))).rejects.toThrow(ValidationError);
   });
 
   it("send dedupes on requestId and marks the span", async () => {
-    const first = await service.send({ from: "dup-from", to: "b", body: "x", requestId: "r" });
-    const again = await service.send({ from: "dup-from", to: "b", body: "x", requestId: "r" });
+    await service.registerAgent("b");
+    const first = await service.send({ from: "dup-from", to: "b", body: "x", requestId: "r" }, asAgent("dup-from"));
+    const again = await service.send({ from: "dup-from", to: "b", body: "x", requestId: "r" }, asAgent("dup-from"));
     expect(again).toMatchObject({ id: first.id, duplicate: true });
     const spans = mem.named("folie.message.send").filter((s) => s.attributes.agent_name === "dup-from");
     expect(spans.map((s) => s.attributes["folie.duplicate"])).toEqual([undefined, true]);
   });
 
   it("records the domain intent on the root span and rejects an empty one", async () => {
-    const { workItem } = await service.submitGoal({ goal: "fold the protein", intent: "biology" });
+    const { workItem } = await service.submitGoal({ goal: "fold the protein", intent: "biology" }, op);
     expect(mem.named("folie.work_item.submit").filter((s) => s.attributes.work_item_id === workItem.id).at(-1)!.attributes["folie.intent"]).toBe("biology");
-    await expect(service.submitGoal({ goal: "g", intent: " " })).rejects.toThrow(ValidationError);
+    await expect(service.submitGoal({ goal: "g", intent: " " }, op)).rejects.toThrow(ValidationError);
   });
 
   it("inbox rejects a non-integer work item scope", async () => {
-    await expect(service.inbox("a", { workItem: 1.5 })).rejects.toThrow(ValidationError);
+    await expect(service.inbox("a", { workItem: 1.5 }, asAgent("a"))).rejects.toThrow(ValidationError);
   });
 });

@@ -9,6 +9,11 @@ let db: Database;
 let store: Store;
 let svc: SwarmService;
 let reset: () => Promise<void>;
+
+// For service-level tests we bypass HTTP auth by passing a principal directly.
+const op = { kind: "operator", name: "operator" } as const;
+const asAgent = (name: string) => ({ kind: "agent", name, generation: 1, executionId: "test-exec" }) as const;
+
 beforeAll(async () => ({ db, store, reset } = await testStore()));
 beforeEach(async () => {
   await reset();
@@ -17,11 +22,12 @@ beforeEach(async () => {
 afterAll(() => db.close());
 
 const report = (agent: string, messageIds: number[], outcome: "done" | "failed" = "done") =>
-  svc.submitReport({ agent, startedAt: new Date().toISOString(), outcome, summary: "s", messageIds });
+  svc.submitReport({ agent, startedAt: new Date().toISOString(), outcome, summary: "s", messageIds }, asAgent(agent));
 
 /** Submits a goal to a named agent and returns the work item plus its (certain) message. */
 async function goalTo(to: string, goal = "g") {
-  const { workItem, message } = await svc.submitGoal({ goal, to });
+  await svc.registerAgent(to);
+  const { workItem, message } = await svc.submitGoal({ goal, to }, op);
   return { workItem, message: message! };
 }
 
@@ -34,7 +40,7 @@ describe("submitGoal", () => {
   });
 
   it("queues a goal with no target: no message, no agent, nobody woken", async () => {
-    const { workItem, message } = await svc.submitGoal({ goal: "anyone" });
+    const { workItem, message } = await svc.submitGoal({ goal: "anyone" }, op);
     expect(message).toBeNull();
     expect(workItem.state).toBe("queued");
     expect(await store.agents.list()).toEqual([]);
@@ -48,47 +54,47 @@ describe("submitGoal", () => {
     [{ goal: "g", to: "-lead" }],
     [{ goal: "g", to: "x".repeat(70) }],
   ])("rejects invalid input %j and writes nothing", async (req) => {
-    await expect(svc.submitGoal(req)).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.submitGoal(req, op)).rejects.toBeInstanceOf(ValidationError);
     expect(await store.agents.list()).toEqual([]);
   });
 });
 
 describe("dispatchQueued", () => {
   it("assigns queued goals oldest first, each to its own agent while all are busy", async () => {
-    const a = (await svc.submitGoal({ goal: "first" })).workItem;
-    const b = (await svc.submitGoal({ goal: "second" })).workItem;
+    const a = (await svc.submitGoal({ goal: "first" }, op)).workItem;
+    const b = (await svc.submitGoal({ goal: "second" }, op)).workItem;
 
     expect(await svc.dispatchQueued(8)).toBe(2);
 
-    expect(await svc.inbox("agent-1")).toMatchObject([{ body: "first", workItemId: a.id, from: "human" }]);
-    expect(await svc.inbox("agent-2")).toMatchObject([{ body: "second", workItemId: b.id }]);
-    expect((await svc.workItem(a.id)).workItem.state).toBe("assigned");
+    expect(await svc.inbox("agent-1", {}, asAgent("agent-1"))).toMatchObject([{ body: "first", workItemId: a.id, from: "human" }]);
+    expect(await svc.inbox("agent-2", {}, asAgent("agent-2"))).toMatchObject([{ body: "second", workItemId: b.id }]);
+    expect((await svc.workItem(a.id, op)).workItem.state).toBe("assigned");
   });
 
   it("reuses an idle agent instead of growing the pool", async () => {
-    const first = (await svc.submitGoal({ goal: "one" })).workItem;
+    const first = (await svc.submitGoal({ goal: "one" }, op)).workItem;
     await svc.dispatchQueued(8);
-    await report("agent-1", [(await svc.inbox("agent-1"))[0]!.id]);
-    expect((await svc.workItem(first.id)).workItem.state).toBe("done");
+    await report("agent-1", [(await svc.inbox("agent-1", {}, asAgent("agent-1")))[0]!.id]);
+    expect((await svc.workItem(first.id, op)).workItem.state).toBe("done");
 
-    await svc.submitGoal({ goal: "two" });
+    await svc.submitGoal({ goal: "two" }, op);
     await svc.dispatchQueued(8);
 
     expect((await svc.listAgents()).map((x) => x.name)).toEqual(["agent-1"]);
-    expect(await svc.inbox("agent-1")).toMatchObject([{ body: "two" }]);
+    expect(await svc.inbox("agent-1", {}, asAgent("agent-1"))).toMatchObject([{ body: "two" }]);
   });
 
   it("stops at the pool ceiling and leaves the rest queued until an agent frees up", async () => {
     const items = [];
-    for (const goal of ["a", "b", "c"]) items.push((await svc.submitGoal({ goal })).workItem);
+    for (const goal of ["a", "b", "c"]) items.push((await svc.submitGoal({ goal }, op)).workItem);
 
     expect(await svc.dispatchQueued(2)).toBe(2);
-    expect((await svc.workItem(items[2]!.id)).workItem.state).toBe("queued");
+    expect((await svc.workItem(items[2]!.id, op)).workItem.state).toBe("queued");
     expect(await svc.dispatchQueued(2)).toBe(0);
 
-    await report("agent-1", [(await svc.inbox("agent-1"))[0]!.id]);
+    await report("agent-1", [(await svc.inbox("agent-1", {}, asAgent("agent-1")))[0]!.id]);
     expect(await svc.dispatchQueued(2)).toBe(1);
-    expect(await svc.inbox("agent-1")).toMatchObject([{ body: "c" }]);
+    expect(await svc.inbox("agent-1", {}, asAgent("agent-1"))).toMatchObject([{ body: "c" }]);
   });
 
   it("does nothing when the queue is empty", async () => {
@@ -98,25 +104,26 @@ describe("dispatchQueued", () => {
 
   it("never hands unaddressed work to an agent that was addressed by name", async () => {
     await goalTo("lead");
-    await report("lead", [(await svc.inbox("lead"))[0]!.id]);
-    await svc.submitGoal({ goal: "pool work" });
+    await report("lead", [(await svc.inbox("lead", {}, asAgent("lead")))[0]!.id]);
+    await svc.submitGoal({ goal: "pool work" }, op);
     await svc.dispatchQueued(8);
-    expect(await svc.inbox("lead")).toEqual([]);
-    expect(await svc.inbox("agent-1")).toHaveLength(1);
+    expect(await svc.inbox("lead", {}, asAgent("lead"))).toEqual([]);
+    expect(await svc.inbox("agent-1", {}, asAgent("agent-1"))).toHaveLength(1);
   });
 });
 
 describe("send", () => {
-  it("wakes an unknown peer by creating it", async () => {
-    const m = await svc.send({ from: "alice", to: "bob", body: "please review" });
+  it("delivers to a registered peer by waking it", async () => {
+    await svc.registerAgent("bob");
+    const m = await svc.send({ from: "alice", to: "bob", body: "please review" }, asAgent("alice"));
     expect(m).toMatchObject({ from: "alice", to: "bob", workItemId: null });
     expect((await svc.listAgents()).map((a) => a.name)).toEqual(["bob"]);
   });
 
   it("validates sender, recipient and body", async () => {
-    await expect(svc.send({ from: "", to: "bob", body: "x" })).rejects.toBeInstanceOf(ValidationError);
-    await expect(svc.send({ from: "a", to: "B!", body: "x" })).rejects.toBeInstanceOf(ValidationError);
-    await expect(svc.send({ from: "a", to: "bob", body: "" })).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.send({ from: "", to: "bob", body: "x" }, asAgent(""))).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.send({ from: "a", to: "B!", body: "x" }, asAgent("a"))).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.send({ from: "a", to: "bob", body: "" }, asAgent("a"))).rejects.toBeInstanceOf(ValidationError);
   });
 });
 
@@ -126,8 +133,8 @@ describe("submitReport", () => {
     const r = await report("a", [message.id]);
 
     expect(r).toMatchObject({ agent: "a", outcome: "done", messageIds: [message.id] });
-    expect(await svc.inbox("a")).toEqual([]);
-    const view = await svc.workItem(workItem.id);
+    expect(await svc.inbox("a", {}, asAgent("a"))).toEqual([]);
+    const view = await svc.workItem(workItem.id, op);
     expect(view.workItem.state).toBe("done");
     expect(view.report).toMatchObject({ id: r.id, summary: "s" });
   });
@@ -135,17 +142,17 @@ describe("submitReport", () => {
   it("parks failed work in blocked, never retries it", async () => {
     const { workItem, message } = await goalTo("a");
     await report("a", [message.id], "failed");
-    expect((await svc.workItem(workItem.id)).workItem.state).toBe("blocked");
-    expect(await svc.inbox("a")).toEqual([]);
+    expect((await svc.workItem(workItem.id, op)).workItem.state).toBe("blocked");
+    expect(await svc.inbox("a", {}, asAgent("a"))).toEqual([]);
   });
 
   it("settles every work item behind a batch of messages and leaves plain messages alone", async () => {
     const one = await goalTo("a", "1");
     const two = await goalTo("a", "2");
-    const peer = await svc.send({ from: "b", to: "a", body: "fyi" });
+    const peer = await svc.send({ from: "b", to: "a", body: "fyi" }, asAgent("b"));
     await report("a", [one.message.id, two.message.id, peer.id]);
-    expect((await svc.workItem(one.workItem.id)).workItem.state).toBe("done");
-    expect((await svc.workItem(two.workItem.id)).workItem.state).toBe("done");
+    expect((await svc.workItem(one.workItem.id, op)).workItem.state).toBe("done");
+    expect((await svc.workItem(two.workItem.id, op)).workItem.state).toBe("done");
   });
 
   it("refuses to ack messages that belong to someone else, atomically", async () => {
@@ -153,8 +160,8 @@ describe("submitReport", () => {
     const theirs = await goalTo("b", "theirs");
     await expect(report("a", [mine.message.id, theirs.message.id])).rejects.toBeInstanceOf(ValidationError);
     // Nothing moved: mine is still unread and its work item still assigned.
-    expect(await svc.inbox("a")).toHaveLength(1);
-    expect((await svc.workItem(mine.workItem.id)).workItem.state).toBe("assigned");
+    expect(await svc.inbox("a", {}, asAgent("a"))).toHaveLength(1);
+    expect((await svc.workItem(mine.workItem.id, op)).workItem.state).toBe("assigned");
   });
 
   it("refuses a second report for already-acked messages", async () => {
@@ -181,70 +188,76 @@ describe("submitReport", () => {
     ["bad timestamp", { messageIds: [1], startedAt: "yesterday-ish" }],
   ])("rejects %s", async (_n, patch) => {
     await expect(
-      svc.submitReport({ agent: "a", startedAt: new Date().toISOString(), outcome: "done", summary: "s", ...patch }),
+      svc.submitReport({ agent: "a", startedAt: new Date().toISOString(), outcome: "done", summary: "s", ...patch }, asAgent("a")),
     ).rejects.toBeInstanceOf(ValidationError);
   });
 });
 
 describe("workItem", () => {
   it("is NotFound for unknown ids", async () => {
-    await expect(svc.workItem(999)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(svc.workItem(999, op)).rejects.toBeInstanceOf(NotFoundError);
   });
 
   it("has no report until an agent reports", async () => {
-    const { workItem } = await svc.submitGoal({ goal: "g", to: "a" });
-    expect(await svc.workItem(workItem.id)).toMatchObject({ workItem: { state: "assigned" }, report: null });
+    await svc.registerAgent("a");
+    const { workItem } = await svc.submitGoal({ goal: "g", to: "a" }, op);
+    expect(await svc.workItem(workItem.id, op)).toMatchObject({ workItem: { state: "assigned" }, report: null });
   });
 });
 
 describe("topics", () => {
-  it("subscribing creates an agent that has never run, so it can be wired up before it exists", async () => {
-    expect(await svc.subscribe("news", { agent: "newcomer" })).toEqual({ topic: "news", agent: "newcomer" });
+  it("subscribing to a registered agent that has never run works", async () => {
+    await svc.registerAgent("newcomer");
+    expect(await svc.subscribe("news", { agent: "newcomer" }, op)).toEqual({ topic: "news", agent: "newcomer" });
     expect((await svc.listAgents()).map((a) => a.name)).toEqual(["newcomer"]);
-    expect(await svc.listTopics()).toEqual([{ topic: "news", subscribers: ["newcomer"] }]);
+    expect(await svc.listTopicsFor(op)).toEqual([{ topic: "news", subscribers: ["newcomer"] }]);
   });
 
   it("publish puts a copy in each subscriber's inbox, naming the topic and the sender", async () => {
-    await svc.subscribe("news", { agent: "a" });
-    await svc.subscribe("news", { agent: "b" });
+    await svc.registerAgent("a"); await svc.registerAgent("b");
+    await svc.subscribe("news", { agent: "a" }, op);
+    await svc.subscribe("news", { agent: "b" }, op);
 
-    expect(await svc.publish("news", { from: "human", body: "ship it" })).toEqual({ delivered: 2 });
+    expect(await svc.publish("news", { from: "human", body: "ship it" }, op)).toEqual({ delivered: 2 });
 
     for (const who of ["a", "b"]) {
-      expect(await svc.inbox(who)).toMatchObject([{ from: "human", topic: "news", body: "ship it", workItemId: null }]);
+      expect(await svc.inbox(who, {}, asAgent(who))).toMatchObject([{ from: "human", topic: "news", body: "ship it", workItemId: null }]);
     }
   });
 
   it("an agent publishing does not wake itself", async () => {
-    await svc.subscribe("news", { agent: "a" });
-    await svc.subscribe("news", { agent: "b" });
-    expect(await svc.publish("news", { from: "a", body: "x" })).toEqual({ delivered: 1 });
-    expect(await svc.inbox("a")).toEqual([]);
+    await svc.registerAgent("a"); await svc.registerAgent("b");
+    await svc.subscribe("news", { agent: "a" }, op);
+    await svc.subscribe("news", { agent: "b" }, op);
+    expect(await svc.publish("news", { from: "a", body: "x" }, asAgent("a"))).toEqual({ delivered: 1 });
+    expect(await svc.inbox("a", {}, asAgent("a"))).toEqual([]);
   });
 
   it("topic mail is acked by the same report as any other mail, and touches no work item", async () => {
-    await svc.subscribe("news", { agent: "a" });
-    await svc.publish("news", { from: "human", body: "x" });
-    const [m] = await svc.inbox("a");
+    await svc.registerAgent("a");
+    await svc.subscribe("news", { agent: "a" }, op);
+    await svc.publish("news", { from: "human", body: "x" }, op);
+    const [m] = await svc.inbox("a", {}, asAgent("a"));
     await report("a", [m!.id]);
-    expect(await svc.inbox("a")).toEqual([]);
+    expect(await svc.inbox("a", {}, asAgent("a"))).toEqual([]);
   });
 
   it("unsubscribe stops delivery", async () => {
-    await svc.subscribe("news", { agent: "a" });
-    await svc.unsubscribe("news", { agent: "a" });
-    expect(await svc.publish("news", { from: "human", body: "x" })).toEqual({ delivered: 0 });
+    await svc.registerAgent("a");
+    await svc.subscribe("news", { agent: "a" }, op);
+    await svc.unsubscribe("news", { agent: "a" }, op);
+    expect(await svc.publish("news", { from: "human", body: "x" }, op)).toEqual({ delivered: 0 });
   });
 
   it.each(["Bad Topic", "-lead", "", "x".repeat(70)])("rejects topic name %j", async (topic) => {
-    await expect(svc.subscribe(topic, { agent: "a" })).rejects.toBeInstanceOf(ValidationError);
-    await expect(svc.publish(topic, { from: "a", body: "x" })).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.subscribe(topic, { agent: "a" }, op)).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.publish(topic, { from: "a", body: "x" }, asAgent("a"))).rejects.toBeInstanceOf(ValidationError);
   });
 
   it("rejects a bad agent, an empty body and an empty sender", async () => {
-    await expect(svc.subscribe("news", { agent: "Bad!" })).rejects.toBeInstanceOf(ValidationError);
-    await expect(svc.publish("news", { from: "a", body: " " })).rejects.toBeInstanceOf(ValidationError);
-    await expect(svc.publish("news", { from: "", body: "x" })).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.subscribe("news", { agent: "Bad!" }, op)).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.publish("news", { from: "a", body: " " }, asAgent("a"))).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.publish("news", { from: "", body: "x" }, asAgent(""))).rejects.toBeInstanceOf(ValidationError);
     expect(await svc.listAgents()).toEqual([]);
   });
 });
@@ -252,27 +265,27 @@ describe("topics", () => {
 describe("operator reads", () => {
   it("messages validates its filters before touching the store", async () => {
     for (const bad of [{ after: -1 }, { after: 1.5 }, { limit: 0 }, { limit: 2.5 }]) {
-      await expect(svc.messages(bad)).rejects.toBeInstanceOf(ValidationError);
+      await expect(svc.messages(bad, op)).rejects.toBeInstanceOf(ValidationError);
     }
-    await expect(svc.messages({ topic: "Bad Topic" })).rejects.toBeInstanceOf(ValidationError);
-    await expect(svc.messages({ agent: "Bad Agent" })).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.messages({ topic: "Bad Topic" }, op)).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.messages({ agent: "Bad Agent" }, op)).rejects.toBeInstanceOf(ValidationError);
   });
 
   it("messages returns the log including queued-then-dispatched goals", async () => {
-    await svc.submitGoal({ goal: "queued" });
-    expect(await svc.messages({})).toEqual([]); // queued goals have no message until dispatched
+    await svc.submitGoal({ goal: "queued" }, op);
+    expect(await svc.messages({}, op)).toEqual([]); // queued goals have no message until dispatched
     await svc.dispatchQueued(8);
-    expect((await svc.messages({})).map((m) => m.body)).toEqual(["queued"]);
+    expect((await svc.messages({}, op)).map((m) => m.body)).toEqual(["queued"]);
   });
 
   it("reports validates limit and agent, and lists newest first", async () => {
-    await expect(svc.reports({ limit: 0 })).rejects.toBeInstanceOf(ValidationError);
-    await expect(svc.reports({ agent: "Bad Agent" })).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.reports({ limit: 0 }, op)).rejects.toBeInstanceOf(ValidationError);
+    await expect(svc.reports({ agent: "Bad Agent" }, op)).rejects.toBeInstanceOf(ValidationError);
 
     const one = await goalTo("a", "1");
     await report("a", [one.message.id]);
     const two = await goalTo("a", "2");
     await report("a", [two.message.id], "failed");
-    expect((await svc.reports({ agent: "a" })).map((r) => r.outcome)).toEqual(["failed", "done"]);
+    expect((await svc.reports({ agent: "a" }, op)).map((r) => r.outcome)).toEqual(["failed", "done"]);
   });
 });

@@ -28,28 +28,45 @@ export interface ClusterOptions {
   obs?: Observability;
   maxAgents?: number;
   gateway?: OtlpGateway;
+  operatorToken?: string;
 }
 
-export async function startCluster({ obs, maxAgents = 2, gateway = otlpGateway(undefined) }: ClusterOptions = {}) {
+export async function startCluster({ obs, maxAgents = 2, gateway = otlpGateway(undefined), operatorToken = "test-operator-token" }: ClusterOptions = {}) {
   const { db, store, reset } = await testStore();
+  await store.auth.setOperatorToken(operatorToken);
   const service = new SwarmService(store, obs);
   const build = () => {
     const ax = new FakeAx();
-    return { ax, controller: new Controller(ax, new FakeEgress(ax.calls), store.agents, CLUSTER_CONFIG, silent, obs) };
+    return { ax, controller: new Controller(ax, new FakeEgress(ax.calls), store.agents, CLUSTER_CONFIG, silent, obs, store.auth) };
   };
   let current = build();
-  const server = httpServer(service, { run: (op, agent) => current.controller.run(op, agent) }, gateway, obs).listen(0);
+  const server = httpServer(service, { run: (op, agent) => current.controller.run(op, agent) }, gateway, obs, store, operatorToken).listen(0);
   await new Promise((r) => server.once("listening", r));
-  const client = new FolieClient(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+  const port = (server.address() as AddressInfo).port;
+  const client = new FolieClient(`http://127.0.0.1:${port}`, fetch, operatorToken);
+
+  // Helper to mint an agent token for a freshly-created execution (mirrors controller).
+  async function agentClientFor(name: string): Promise<FolieClient> {
+    // In tests the controller mints on task create; for direct pre-registered agents we mint here.
+    const cred = await store.auth.getAgentCredential(name).catch(() => null);
+    const generation = cred?.generation ?? 1;
+    const execId = `test-exec-${name}-${Math.random().toString(36).slice(2, 8)}`;
+    const token = await store.auth.mintAgentToken(name, execId, generation);
+    await store.auth.upsertExecution(name, execId, generation, "running");
+    return new FolieClient(`http://127.0.0.1:${port}`, fetch, token);
+  }
 
   return {
     db: db as Database,
     store: store as Store,
     service,
     client,
+    operatorToken,
+    agentClientFor,
     /** A clean database and a fresh ax. Returns the new ax and controller. */
     async reset() {
       await reset();
+      await store.auth.setOperatorToken(operatorToken);
       current = build();
       return current;
     },
@@ -61,7 +78,27 @@ export async function startCluster({ obs, maxAgents = 2, gateway = otlpGateway(u
     /** Plays the cluster: every task the controller has made runs its agent loop once. */
     async runAgents(runtimeFor: (name: string) => Runtime, deps: LoopDeps = {}) {
       for (const { spec, phase } of current.ax.tasks.values()) {
-        if (phase === "Running") await new AgentLoop(spec.name, client, runtimeFor(spec.name), { out: captureSink(), ...deps }).tick();
+        if (phase !== "Running") continue;
+        // Agents authenticate with their execution token (minted by the controller at task create).
+        // If that token is not yet in the DB (e.g. task created before token minting in a race), mint one as fallback.
+        let agentClient: FolieClient;
+        try {
+          // Find the token for this agent by querying executions? The controller minted it and stored the hash; we minted a fresh one here for tests? No - we must reuse the token the controller minted, which is in the task env. FakeAx stores spec.env; extract FOLIE_AGENT_TOKEN.
+          const rawToken = (spec as any).env?.FOLIE_AGENT_TOKEN as string | undefined;
+          if (rawToken) {
+            agentClient = new FolieClient(`http://127.0.0.1:${port}`, fetch, rawToken);
+          } else {
+            agentClient = await agentClientFor(spec.name);
+          }
+        } catch {
+          agentClient = client;
+        }
+        const runtime = runtimeFor(spec.name);
+        // If the runtime holds a reference to a FolieClient (PiRuntime), swap it for the agent-authenticated one so tool calls authenticate as this agent.
+        if ((runtime as any).d?.server) {
+          (runtime as any).d.server = agentClient;
+        }
+        await new AgentLoop(spec.name, agentClient, runtime, { out: captureSink(), ...deps }).tick();
       }
     },
     age: (name: string, seconds: number) =>

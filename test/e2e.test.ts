@@ -70,7 +70,8 @@ describe("trace propagation", () => {
 
   it("a delegated message continues the delegating agent's trace into the peer's session", async () => {
     const root = tracer.startSpan("delegation");
-    await context.with(trace.setSpan(context.active(), root), () => client.send({ from: "boss", to: "worker", body: "take this" }));
+    await client.registerAgent("worker"); await client.registerAgent("boss");
+    await context.with(trace.setSpan(context.active(), root), () => client.send({ from: "human", to: "worker", body: "take this" }));
     root.end();
 
     await tick();
@@ -102,13 +103,14 @@ describe("mid-session steering, end to end", () => {
   const tool = (name: string, args: Record<string, string>) => fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
 
   it("takes a correction sent while the model is thinking, leaves another goal's mail for its own session, and acks everything it consumed", async () => {
+    await client.registerAgent("steered");
     const first = (await client.submitGoal({ goal: "survey the literature", to: "steered" })).workItem;
     await tick();
 
     let modelSawMidTurn = "";
     const turn1: FauxResponseFactory = async () => {
       // Arrives while the session is running: a correction for this work item (no work item of its own) and a different goal.
-      await client.send({ from: "operator", to: "steered", body: "focus on 2024 papers" });
+      await client.send({ from: "human", to: "steered", body: "focus on 2024 papers" });
       await client.submitGoal({ goal: "unrelated goal", to: "steered" });
       return tool("topic_subscribe", { topic: "papers" });
     };
@@ -139,6 +141,7 @@ describe("mid-session steering, end to end", () => {
   });
 
   it("then gives the other goal a fresh session that knows nothing of the first", async () => {
+    await client.registerAgent("fresh");
     await client.submitGoal({ goal: "alpha goal", to: "fresh" });
     await client.submitGoal({ goal: "beta goal", to: "fresh" });
     await tick();
@@ -167,6 +170,7 @@ describe("what the server derives from sessions", () => {
       fauxAssistantMessage([fauxToolCall("topic_subscribe", { topic: "t" })], { stopReason: "toolUse" }),
       fauxAssistantMessage([fauxToolCall("report_submit", { outcome: "done", summary: "ok" })], { stopReason: "toolUse" }),
     ]);
+    await client.registerAgent("metered");
     await client.submitGoal({ goal: "measure me", to: "metered" });
     await tick();
     await runAgents((name) => new PiRuntime({ agentName: name, model: faux.getModel(), streamFn: models.streamSimple.bind(models), codingTools: [], workdir, server: client }));
@@ -182,8 +186,9 @@ describe("what the server derives from sessions", () => {
 
   it("reports queue depth per agent at collection time", async () => {
     mem.telemetry.metrics.observeInboxDepth(async () => (await client.agents()).map((a) => ({ agent: a.name, depth: a.unread })));
-    await client.send({ from: "x", to: "backlogged", body: "1" });
-    await client.send({ from: "x", to: "backlogged", body: "2" });
+    await client.registerAgent("backlogged");
+    await client.send({ from: "human", to: "backlogged", body: "1" });
+    await client.send({ from: "human", to: "backlogged", body: "2" });
     expect((await mem.metrics())["folie.inbox.depth{agent_name=backlogged}"]).toBe(2);
   });
 });

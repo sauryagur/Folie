@@ -49,10 +49,12 @@ it("the pool grows to its ceiling under load, queues the overflow, and drains it
 });
 
 it("emergence: an agent delegating by message wakes a peer that did not exist", async () => {
+  await client.registerAgent("lead"); await client.registerAgent("worker");
   const { workItem } = await client.submitGoal({ goal: "split this up", to: "lead" });
   const delegating: Runtime = {
     run: async () => {
-      await client.send({ from: "lead", to: "worker", body: "take the second half" });
+      const ac = await cluster.agentClientFor("lead");
+      await ac.send({ from: "lead", to: "worker", body: "take the second half" });
       return { outcome: "done", summary: "delegated" };
     },
   };
@@ -70,6 +72,7 @@ it("emergence: an agent delegating by message wakes a peer that did not exist", 
 });
 
 it("a topic publish wakes subscribers that have never run, and reaches them again after they are suspended", async () => {
+  await client.registerAgent("watch-1"); await client.registerAgent("watch-2");
   await client.subscribe("alerts", { agent: "watch-1" });
   await client.subscribe("alerts", { agent: "watch-2" });
   expect(ax.tasks.size).toBe(0); // subscribing alone wakes nobody
@@ -94,12 +97,14 @@ it("a topic publish wakes subscribers that have never run, and reaches them agai
 });
 
 it("an agent publishing from a session wakes the other subscribers, not itself", async () => {
+  await client.registerAgent("lead"); await client.registerAgent("worker");
   await client.subscribe("alerts", { agent: "lead" });
   await client.subscribe("alerts", { agent: "worker" });
   await client.submitGoal({ goal: "announce", to: "lead" });
   const announcing: Runtime = {
     run: async () => {
-      await client.publish("alerts", { from: "lead", body: "heads up" });
+      const ac = await cluster.agentClientFor("lead");
+      await ac.publish("alerts", { from: "lead", body: "heads up" });
       return { outcome: "done", summary: "announced" };
     },
   };
@@ -170,6 +175,7 @@ it("lifecycle: quiet agents are suspended, resumed by new mail with the same tas
 });
 
 it("operator steering over HTTP: suspend, resume and the delete kill switch", async () => {
+  await client.registerAgent("a");
   await client.submitGoal({ goal: "work", to: "a" });
   await tick();
   await runAgents(() => echoRuntime);

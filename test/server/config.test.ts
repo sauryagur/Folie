@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/server/config";
 
-const base = { DATABASE_URL: "postgres://x", FOLIE_AGENT_IMAGE: "img@sha256:1" };
+const base = { DATABASE_URL: "postgres://x", FOLIE_AGENT_IMAGE: "img@sha256:1", FOLIE_OPERATOR_TOKEN: "operator-secret" };
 
 describe("loadConfig", () => {
   it("fills in-cluster defaults", () => {
