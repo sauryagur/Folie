@@ -1,13 +1,14 @@
 import { context, trace } from "@opentelemetry/api";
 import { beforeEach, describe, expect, it } from "vitest";
 import { Controller, type ControllerConfig } from "../../src/server/controller";
+import type { ExecutionSpec } from "../../src/server/provider";
 import { NotFoundError, ValidationError } from "../../src/server/errors";
 import { FakeAx, FakeEgress, silent } from "../support/fakes";
 import { memoryTelemetry } from "../support/otel";
 import { storableTrace } from "../../src/shared/trace";
 
 const cfg: ControllerConfig = {
-  atespace: "folie",
+  namespace: "folie",
   image: "registry/agent@sha256:abc",
   command: ["/usr/local/bin/folie-agent"],
   env: { FOLIE_SERVER_URL: "http://server", ANTHROPIC_API_KEY: "k" },
@@ -35,25 +36,28 @@ let agents: FakeAgents;
 let controller: Controller;
 beforeEach(() => {
   ax = new FakeAx();
-  egress = new FakeEgress(ax.calls);
+  egress = ax.egress as FakeEgress;
   agents = new FakeAgents();
-  controller = new Controller(ax, egress, agents, cfg, silent);
+  controller = new Controller(ax, agents, cfg, silent);
 });
 
 /** A task that exists in ax in the given phase, as if the controller had made it earlier. */
 async function taskIn(name: string, phase: string) {
-  await ax.createTask({ atespace: "folie", name, image: "i", command: [], env: {} });
-  ax.tasks.get(`folie/${name}`)!.phase = phase;
+  ax.tasks.set(`folie/${name}`, { spec: mkSpec(name), phase, actor: name });
   ax.calls.length = 0;
 }
 
+function mkSpec(key: string): ExecutionSpec {
+  return { key, namespace: "folie", image: "i", command: [], env: {}, workspace: { ref: `${key}-ws` }, network: { profile: "full-trust" } };
+}
+
 describe("wake demand", () => {
-  it("creates, grants egress, then resumes the task of an agent that has mail but no task", async () => {
+  it("creates, grants egress, then starts the execution of an agent that has mail but no task", async () => {
     agents.unread = ["agent-1"];
     await controller.reconcileOnce();
 
     // Egress must land before resume: a sandbox that starts first has no DNS and never reaches the server.
-    expect(ax.calls).toEqual(["create agent-1", "egress folie/agent-1", "resume agent-1"]);
+    expect(ax.calls).toEqual(["workspace agent-1-ws", "create agent-1", "egress folie/agent-1", "resume agent-1"]);
     const { spec, phase } = ax.tasks.get("folie/agent-1")!;
     expect(phase).toBe("Running");
     expect(spec).toMatchObject({ image: cfg.image, command: cfg.command });
@@ -63,16 +67,23 @@ describe("wake demand", () => {
 
   it("grants egress to the actor ax reports, not to the task name", async () => {
     agents.unread = ["a"];
-    const create = ax.createTask.bind(ax);
-    ax.createTask = async (spec) => {
-      await create(spec);
+    const ensure = ax.ensure.bind(ax);
+    ax.ensure = async (spec) => {
+      const st = await ensure(spec);
       ax.tasks.get("folie/a")!.actor = "actor-xyz";
+      return st;
     };
     await controller.reconcileOnce();
     expect(ax.calls).toContain("egress folie/actor-xyz");
   });
 
-  it("resumes a suspended task without recreating it (memory lives in its workspace)", async () => {
+  it("binds a durable workspace so task recreation never destroys agent files", async () => {
+    agents.unread = ["agent-1"];
+    await controller.reconcileOnce();
+    expect(ax.tasks.get("folie/agent-1")!.spec.workspace).toEqual({ ref: "agent-1-ws" });
+  });
+
+  it("resumes a suspended execution without recreating it (memory lives in its workspace)", async () => {
     await taskIn("a", "Suspended");
     agents.unread = ["a"];
     await controller.reconcileOnce();
@@ -83,7 +94,7 @@ describe("wake demand", () => {
     agents.unread = ["a"];
     egress.failFor.add("a");
     await controller.reconcileOnce();
-    expect(ax.tasks.get("folie/a")?.phase).toBe("Suspended");
+    expect(ax.tasks.get("folie/a")?.phase).toBe("Pending");
     expect(agents.states.has("a")).toBe(false);
 
     egress.failFor.clear();
@@ -104,7 +115,7 @@ describe("wake demand", () => {
     expect(ax.calls).toEqual([]);
   });
 
-  it.each(["Failed", "Resuming"])("does not wake a task in phase %s", async (phase) => {
+  it.each(["Failed", "Terminating"])("does not wake an execution in phase %s", async (phase) => {
     await taskIn("a", phase);
     agents.unread = ["a"];
     await controller.reconcileOnce();
@@ -120,9 +131,9 @@ describe("wake demand", () => {
     expect(agents.states.has("bad")).toBe(false);
   });
 
-  it("scopes tasks and grants to the configured atespace", async () => {
+  it("scopes executions and grants to the configured namespace", async () => {
     agents.unread = ["a"];
-    await new Controller(ax, egress, agents, { ...cfg, atespace: "other" }, silent).reconcileOnce();
+    await new Controller(ax, agents, { ...cfg, namespace: "other" }, silent).reconcileOnce();
     expect([...ax.tasks.keys()]).toEqual(["other/a"]);
     expect(ax.calls).toContain("egress other/a");
   });
@@ -139,7 +150,7 @@ describe("idle sweep: suspend", () => {
     expect(agents.idleQueries).toContainEqual(["running", 60]);
   });
 
-  it("only records the state when the task is already suspended (an operator got there first)", async () => {
+  it("only records the state when the execution is already suspended (an operator got there first)", async () => {
     await taskIn("a", "Suspended");
     agents.idleByState.set("running", ["a"]);
     await controller.reconcileOnce();
@@ -147,14 +158,14 @@ describe("idle sweep: suspend", () => {
     expect(agents.states.get("a")).toBe("suspended");
   });
 
-  it("marks an agent retired when its task has vanished", async () => {
+  it("marks an agent retired when its execution has vanished", async () => {
     agents.idleByState.set("running", ["ghost"]);
     await controller.reconcileOnce();
     expect(ax.calls).toEqual([]);
     expect(agents.states.get("ghost")).toBe("retired");
   });
 
-  it("deletes a dead (Failed) quiet agent rather than suspending it", async () => {
+  it("deletes a dead (failed) quiet agent rather than suspending it", async () => {
     await taskIn("a", "Failed");
     agents.idleByState.set("running", ["a"]);
     await controller.reconcileOnce();
@@ -162,7 +173,7 @@ describe("idle sweep: suspend", () => {
     expect(agents.states.get("a")).toBe("retired");
   });
 
-  it("leaves a task in a transitional phase for the next pass", async () => {
+  it("leaves an execution in a transitional phase for the next pass", async () => {
     await taskIn("a", "Resuming");
     agents.idleByState.set("running", ["a"]);
     await controller.reconcileOnce();
@@ -193,7 +204,7 @@ describe("operator ops", () => {
     expect(agents.states.get("a")).toBe("suspended");
   });
 
-  it("suspend refuses an agent with no task (404) or a task in some other phase (400)", async () => {
+  it("suspend refuses an agent with no execution (404) or one in some other phase (400)", async () => {
     await expect(controller.run("suspend", "ghost")).rejects.toBeInstanceOf(NotFoundError);
     await taskIn("a", "Failed");
     await expect(controller.run("suspend", "a")).rejects.toBeInstanceOf(ValidationError);
@@ -207,12 +218,12 @@ describe("operator ops", () => {
     expect(ax.calls).toEqual(["egress folie/a", "resume a"]);
   });
 
-  it("resume creates the task for an agent that has none", async () => {
+  it("resume creates the execution for an agent that has none", async () => {
     await controller.run("resume", "fresh");
-    expect(ax.calls).toEqual(["create fresh", "egress folie/fresh", "resume fresh"]);
+    expect(ax.calls).toEqual(["workspace fresh-ws", "create fresh", "egress folie/fresh", "resume fresh"]);
   });
 
-  it("delete is the kill switch: it destroys even a running task", async () => {
+  it("delete is the kill switch: it destroys even a running execution", async () => {
     await taskIn("a", "Running");
     expect(await controller.run("delete", "a")).toEqual({ agent: "a", state: "retired" });
     expect(ax.calls).toEqual(["delete a"]);
@@ -220,13 +231,13 @@ describe("operator ops", () => {
     expect(agents.states.get("a")).toBe("retired");
   });
 
-  it("delete of an agent with no task still records it retired, so repeating it is safe", async () => {
+  it("delete of an agent with no execution still records it retired, so repeating it is safe", async () => {
     await controller.run("delete", "ghost");
     expect(ax.calls).toEqual([]);
     expect(agents.states.get("ghost")).toBe("retired");
   });
 
-  it("rejects a malformed agent name before touching ax", async () => {
+  it("rejects a malformed agent name before touching the provider", async () => {
     await expect(controller.run("delete", "Bad Name")).rejects.toBeInstanceOf(ValidationError);
     expect(ax.calls).toEqual([]);
   });
@@ -243,7 +254,7 @@ describe("idle sweep: retire", () => {
     expect(agents.idleQueries).toContainEqual(["suspended", 600]);
   });
 
-  it("never deletes a task that is running, whatever the database believes", async () => {
+  it("never deletes an execution that is running, whatever the database believes", async () => {
     await taskIn("a", "Running");
     agents.idleByState.set("suspended", ["a"]);
     await controller.reconcileOnce();
@@ -251,14 +262,14 @@ describe("idle sweep: retire", () => {
     expect(agents.states.has("a")).toBe(false);
   });
 
-  it("marks retired without calling ax when the task is already gone", async () => {
+  it("marks retired without calling the provider when the execution is already gone", async () => {
     agents.idleByState.set("suspended", ["gone"]);
     await controller.reconcileOnce();
     expect(ax.calls).toEqual([]);
     expect(agents.states.get("gone")).toBe("retired");
   });
 
-  it("retired agents that get mail again come back as a fresh task", async () => {
+  it("retired agents that get mail again come back as a fresh execution", async () => {
     await taskIn("a", "Suspended");
     agents.idleByState.set("suspended", ["a"]);
     await controller.reconcileOnce();
@@ -267,15 +278,15 @@ describe("idle sweep: retire", () => {
 
     agents.unread = ["a"];
     await controller.reconcileOnce();
-    expect(ax.calls).toEqual(["create a", "egress folie/a", "resume a"]);
+    expect(ax.calls).toEqual(["workspace a-ws", "create a", "egress folie/a", "resume a"]);
   });
 
   it("keeps sweeping the others when one deletion fails", async () => {
     await taskIn("bad", "Suspended");
     await taskIn("good", "Suspended");
     agents.idleByState.set("suspended", ["bad", "good"]);
-    const del = ax.deleteTask.bind(ax);
-    ax.deleteTask = async (a, n) => (n === "bad" ? Promise.reject(new Error("ax down")) : del(a, n));
+    const del = ax.terminate.bind(ax);
+    ax.terminate = async (ref, o) => (ref.key === "bad" ? Promise.reject(new Error("provider down")) : del(ref, o));
     await controller.reconcileOnce();
     expect(agents.states.get("good")).toBe("retired");
     expect(agents.states.has("bad")).toBe(false);
@@ -284,7 +295,7 @@ describe("idle sweep: retire", () => {
 
 describe("wake tracing", () => {
   const mem = memoryTelemetry();
-  const traced = () => new Controller(ax, egress, agents, cfg, silent, mem.telemetry);
+  const traced = () => new Controller(ax, agents, cfg, silent, mem.telemetry);
   const parentTrace = () => {
     const span = mem.telemetry.tracer.startSpan("dispatch");
     span.end();
@@ -314,7 +325,7 @@ describe("wake tracing", () => {
     };
     await traced().reconcileOnce();
 
-    expect(callsAtRetrace).toEqual(["create traced-2", "egress folie/traced-2"]); // resume has not happened yet
+    expect(callsAtRetrace).toEqual(["workspace traced-2-ws", "create traced-2", "egress folie/traced-2"]); // resume has not happened yet
     const init = mem.named("folie.sandbox.init").find((s) => s.attributes.agent_name === "traced-2")!;
     expect(retracedTo).toContain(init.spanContext().spanId);
   });
@@ -329,9 +340,9 @@ describe("wake tracing", () => {
     expect(ax.calls).toEqual([]);
   });
 
-  it("records an ax failure on the wake span, and the pass carries on", async () => {
+  it("records a provider failure on the wake span, and the pass carries on", async () => {
     agents.unread = ["broken"];
-    ax.createTask = async () => {
+    ax.ensure = async () => {
       throw new Error("ax unavailable");
     };
     await traced().reconcileOnce();

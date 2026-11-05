@@ -1,45 +1,84 @@
-import type { AxClient, AxTaskSpec } from "../../src/server/ax";
 import type { EgressPolicies } from "../../src/server/substrate";
+import type { ExecutionProvider, ExecutionSpec, ExecutionState, NetworkPolicy, ProviderRef } from "../../src/server/provider";
 import type { Logger } from "../../src/shared/logger";
 
 export const silent: Logger = { log: () => {}, error: () => {} };
 
-/** In-memory ax: tasks by "<atespace>/<name>", phase as ax reports it. New tasks start Suspended, like ax. */
-export class FakeAx implements AxClient {
-  readonly tasks = new Map<string, { spec: AxTaskSpec; phase: string; actor: string }>();
+/** ax phase names as the control plane reports them. */
+function executionPhase(raw: string): ExecutionState["phase"] {
+  const m: Record<string, ExecutionState["phase"]> = { Running: "running", Suspended: "suspended", Failed: "failed", Pending: "provisioning", Terminating: "unknown", Completed: "unknown" };
+  return m[raw] ?? "unknown";
+}
+
+/** In-memory ax: tasks keyed "<namespace>/<name>", phase exactly as ax reports it. Created tasks start Pending, like ax. */
+export class FakeAx implements ExecutionProvider {
+  readonly tasks = new Map<string, { spec: ExecutionSpec; phase: string; actor: string }>();
   readonly calls: string[] = [];
+  readonly egress: EgressPolicies & { failFor: Set<string> };
   failFor = new Set<string>();
+  readonly capabilities = { suspend: true, checkpoint: true, list: true, resourceLimits: true, network: "allowlist" as const, logs: false, inFlightCancel: false };
 
-  private key = (atespace: string, name: string) => `${atespace}/${name}`;
-
-  async getTask(atespace: string, name: string) {
-    const t = this.tasks.get(this.key(atespace, name));
-    return t ? { phase: t.phase, actor: t.actor } : null;
+  constructor(egress?: EgressPolicies) {
+    // The grant shares this call log so create/egress/resume ordering stays assertable through ax.calls alone.
+    this.egress = (egress as EgressPolicies & { failFor: Set<string> }) ?? new FakeEgress(this.calls);
   }
 
-  async createTask(spec: AxTaskSpec) {
-    if (this.failFor.has(spec.name)) throw new Error(`ax refused ${spec.name}`);
-    this.calls.push(`create ${spec.name}`);
-    this.tasks.set(this.key(spec.atespace, spec.name), { spec, phase: "Suspended", actor: spec.name });
+  private key = (ref: ProviderRef) => `${ref.namespace}/${ref.key}`;
+  private state(ref: ProviderRef): ExecutionState | null {
+    const t = this.tasks.get(this.key(ref));
+    return t ? { ref, phase: executionPhase(t.phase), since: new Date().toISOString() } : null;
   }
 
-  async resumeTask(atespace: string, name: string) {
-    this.calls.push(`resume ${name}`);
-    const t = this.tasks.get(this.key(atespace, name));
+  async inspect(ref: ProviderRef) {
+    return this.state(ref);
+  }
+
+  async *list(namespace: string) {
+    for (const [k, t] of this.tasks) {
+      const i = k.indexOf("/");
+      if (k.slice(0, i) !== namespace) continue;
+      yield { ref: { namespace, key: k.slice(i + 1) }, phase: executionPhase(t.phase), since: new Date().toISOString() };
+    }
+  }
+
+  async ensure(spec: ExecutionSpec): Promise<ExecutionState> {
+    const ref = { key: spec.key, namespace: spec.namespace };
+    if (this.failFor.has(spec.key)) throw new Error(`provider refused ${spec.key}`);
+    const existing = this.state(ref);
+    if (existing) return existing;
+    if (!spec.workspace) throw new Error(`task ${spec.key} binds no workspace (R-6.2)`);
+    this.calls.push(`workspace ${spec.workspace.ref}`);
+    this.calls.push(`create ${spec.key}`);
+    this.tasks.set(this.key(ref), { spec, phase: "Pending", actor: spec.key });
+    return { ref, phase: "provisioning", since: new Date().toISOString() };
+  }
+
+  async start(ref: ProviderRef) {
+    this.calls.push(`resume ${ref.key}`);
+    const t = this.tasks.get(this.key(ref));
     if (!t) throw new Error("no such task");
     t.phase = "Running";
+    return this.state(ref)!;
   }
 
-  async suspendTask(atespace: string, name: string) {
-    this.calls.push(`suspend ${name}`);
-    const t = this.tasks.get(this.key(atespace, name));
+  async suspend(ref: ProviderRef) {
+    this.calls.push(`suspend ${ref.key}`);
+    const t = this.tasks.get(this.key(ref));
     if (!t) throw new Error("no such task");
     t.phase = "Suspended";
+    return this.state(ref)!;
   }
 
-  async deleteTask(atespace: string, name: string) {
-    this.calls.push(`delete ${name}`);
-    if (!this.tasks.delete(this.key(atespace, name))) throw new Error("no such task");
+  async terminate(ref: ProviderRef, o: { destroyWorkspace: boolean }) {
+    this.calls.push(`delete ${ref.key}`);
+    if (!o.destroyWorkspace) throw new Error("refusing: no destroy");
+    if (!this.tasks.delete(this.key(ref))) throw new Error("no such task");
+  }
+
+  async setNetworkPolicy(ref: ProviderRef, policy: NetworkPolicy) {
+    if (policy.profile !== "full-trust") throw new Error(`policy ${policy.profile} not supported`);
+    const actor = this.tasks.get(this.key(ref))?.actor ?? ref.key;
+    await this.egress.ensureAllowAll(ref.namespace, actor);
   }
 }
 

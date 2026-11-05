@@ -12,11 +12,11 @@ import type { Store } from "../../src/server/store";
 import { FolieClient } from "../../src/shared/client";
 import type { Observability } from "../../src/shared/telemetry";
 import { testStore } from "./db";
-import { FakeAx, FakeEgress, silent } from "./fakes";
+import { FakeAx, silent } from "./fakes";
 import { captureSink } from "./otel";
 
 export const CLUSTER_CONFIG: ControllerConfig = {
-  atespace: "folie",
+  namespace: "folie",
   image: "img@sha256:1",
   command: ["agent"],
   env: {},
@@ -37,7 +37,7 @@ export async function startCluster({ obs, maxAgents = 2, gateway = otlpGateway(u
   const service = new SwarmService(store, obs);
   const build = () => {
     const ax = new FakeAx();
-    return { ax, controller: new Controller(ax, new FakeEgress(ax.calls), store.agents, CLUSTER_CONFIG, silent, obs, store.auth) };
+    return { ax, controller: new Controller(ax, store.agents, CLUSTER_CONFIG, silent, obs, store.auth) };
   };
   let current = build();
   const server = httpServer(service, { run: (op, agent) => current.controller.run(op, agent) }, gateway, obs, store, operatorToken).listen(0);
@@ -88,17 +88,17 @@ export async function startCluster({ obs, maxAgents = 2, gateway = otlpGateway(u
           if (rawToken) {
             agentClient = new FolieClient(`http://127.0.0.1:${port}`, fetch, rawToken);
           } else {
-            agentClient = await agentClientFor(spec.name);
+            agentClient = await agentClientFor(spec.key);
           }
         } catch {
           agentClient = client;
         }
-        const runtime = runtimeFor(spec.name);
+        const runtime = runtimeFor(spec.key);
         // If the runtime holds a reference to a FolieClient (PiRuntime), swap it for the agent-authenticated one so tool calls authenticate as this agent.
         if ((runtime as any).d?.server) {
           (runtime as any).d.server = agentClient;
         }
-        await new AgentLoop(spec.name, agentClient, runtime, { out: captureSink(), ...deps }).tick();
+        await new AgentLoop(spec.key, agentClient, runtime, { out: captureSink(), ...deps }).tick();
       }
     },
     age: (name: string, seconds: number) =>

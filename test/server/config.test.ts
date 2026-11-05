@@ -10,7 +10,7 @@ describe("loadConfig", () => {
       port: 8080,
       axAddr: "ax-server.ax-system.svc:8080",
       reconcileMs: 2000,
-      controller: { atespace: "folie", image: "img@sha256:1", command: ["/usr/local/bin/folie-agent"] },
+      controller: { namespace: "folie", image: "img@sha256:1", command: ["/usr/local/bin/folie-agent"] },
       substrate: {
         address: "api.ate-system.svc.cluster.local:443",
         authority: "api.ate-system.svc",
@@ -68,4 +68,19 @@ describe("loadConfig", () => {
   it.each(["", "abc", "0", "70000", "80,,443", "80.5"])("rejects egress ports %j", (raw) => {
     expect(() => loadConfig({ ...base, FOLIE_EGRESS_HTTP_PORTS: raw })).toThrow(/FOLIE_EGRESS_HTTP_PORTS/);
   });
+
+  it("reads FOLIE_AGENT_RESOURCES into provider resource limits", () => {
+    const c = loadConfig({ ...base, FOLIE_AGENT_RESOURCES: "cpu=250m,memory=512Mi" });
+    expect(c.controller.resources).toEqual({ cpu: "250m", memory: "512Mi" });
+    expect(loadConfig(base).controller.resources).toBeUndefined();
+    for (const bad of ["nomatch", "cpu=1m,bad=2m"]) {
+      expect(() => loadConfig({ ...base, FOLIE_AGENT_RESOURCES: bad })).toThrow(/FOLIE_AGENT_RESOURCES/);
+    }
+  });
+
+  const workspaceCheck = () => {
+    const c = loadConfig(base);
+    expect(c.controller.namespace).toBe("folie");
+  };
+  it("sets the execution namespace", workspaceCheck);
 });
