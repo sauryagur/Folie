@@ -85,6 +85,12 @@ export interface BudgetRepo {
   /** Close: return unspent to parent and mark closed. */
   close(budgetId: number): Promise<BudgetRecord | null>;
 }
+export interface ControlRepo {
+  queue(b: { agent: string; type: string; reason: string }): Promise<number>;
+  /** Actions with id > after, oldest first; returns cursor (= max id seen). */
+  poll(agent: string, after: number): Promise<{ cursor: number; actions: { id: number; type: string; reason: string }[] }>;
+}
+
 export interface VerificationRepo {
   request(b: { taskId: number; check: string; verifier: string; required: boolean }): Promise<VerificationRecord>;
   get(id: number): Promise<VerificationRecord | null>;
@@ -208,6 +214,7 @@ export interface Repos {
   budgets: BudgetRepo;
   verifications: VerificationRepo;
   goalEvaluations: GoalEvaluationRepo;
+  control: ControlRepo;
 }
 
 export interface Store extends Repos {

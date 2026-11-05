@@ -150,6 +150,14 @@ CREATE TABLE IF NOT EXISTS usage_records (
   basis       text NOT NULL CHECK (basis IN ('estimated','measured','external_charge')),
   created_at  timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS control_signals (
+  id          serial PRIMARY KEY,
+  agent       text NOT NULL REFERENCES agents(name),
+  type        text NOT NULL CHECK (type IN ('cancel','pause','stop','lease_lost')),
+  reason      text NOT NULL DEFAULT '',
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS control_signals_agent ON control_signals (agent, id);
 CREATE TABLE IF NOT EXISTS tasks (
   id          serial PRIMARY KEY,
   work_item_id int NOT NULL REFERENCES work_items(id),

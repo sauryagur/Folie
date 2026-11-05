@@ -14,7 +14,7 @@ import type {
   WorkItemState,
 } from "../shared/types";
 import type { Database, Queryable, Row } from "./db";
-import type { AgentRepo, AuthRepo, BudgetRepo, EventRepo, ExecutionRegistryRepo, GoalEvaluationRepo, MessageRepo, Repos, ReportRepo, SessionRecord, SessionRepo, Store, StoredTrace, TaskRepo, TopicRepo, VerificationRepo, WorkItemRepo } from "./store";
+import type { AgentRepo, AuthRepo, BudgetRepo, ControlRepo, EventRepo, ExecutionRegistryRepo, GoalEvaluationRepo, MessageRepo, Repos, ReportRepo, SessionRecord, SessionRepo, Store, StoredTrace, TaskRepo, TopicRepo, VerificationRepo, WorkItemRepo } from "./store";
 import { generateExecutionId, generateToken, hashToken } from "./auth";
 
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
@@ -675,6 +675,23 @@ const goalEvaluations = (q: Queryable): GoalEvaluationRepo => ({
     return { workItemId: r.work_item_id as number, verdict: r.verdict as GoalEvaluation["verdict"], caveats: (typeof r.caveats === "string" ? JSON.parse(r.caveats) : r.caveats) as string[] };
   },
 });
+const control = (q: Queryable): ControlRepo => ({
+  async queue({ agent, type, reason }) {
+    const { rows } = await q.query(
+      `INSERT INTO control_signals (agent, type, reason) VALUES ($1,$2,$3) RETURNING id`,
+      [agent, type, reason],
+    );
+    return Number(rows[0]!.id);
+  },
+  async poll(agent, after) {
+    const { rows } = await q.query(
+      `SELECT id, type, reason FROM control_signals WHERE agent=$1 AND id > $2 ORDER BY id`,
+      [agent, after],
+    );
+    const actions = rows.map((r) => ({ id: Number(r.id), type: String(r.type), reason: String(r.reason) }));
+    return { cursor: actions.length ? actions[actions.length - 1]!.id : after, actions };
+  },
+});
 
 const bind = (q: Queryable): Repos => ({
   messages: messages(q),
@@ -690,6 +707,7 @@ const bind = (q: Queryable): Repos => ({
   budgets: budgets(q),
   verifications: verifications(q),
   goalEvaluations: goalEvaluations(q),
+  control: control(q),
 });
 
 export function pgStore(db: Database): Store {

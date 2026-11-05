@@ -161,6 +161,19 @@ export interface RecordUsageRequest {
 export interface CloseBudgetRequest {
   budgetId: number;
 }
+export interface ControlAction {
+  type: "cancel" | "pause" | "stop" | "lease_lost";
+  reason: string;
+  cursor: number;
+}
+export interface ControlReply {
+  cursor: number;
+  actions: ControlAction[];
+}
+export interface QueueCancelRequest {
+  agent: string;
+  reason: string;
+}
 export interface VerificationRecord {
   id: number;
   taskId: number;

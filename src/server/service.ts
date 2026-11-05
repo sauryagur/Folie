@@ -21,6 +21,9 @@ import {
   type SessionUsage,
   type SubmitGoalRequest,
   type StartSessionRequest,
+  type ControlAction,
+  type ControlReply,
+  type QueueCancelRequest,
   type EvaluateGoalRequest,
   type GoalEvaluation,
   type RecordVerdictRequest,
@@ -494,6 +497,31 @@ export class SwarmService {
     const verdict = "not_achieved" as const;
     const caveats = ["no verified task yet"];
     return this.store.goalEvaluations.record({ workItemId: req.workItemId, verdict, caveats });
+  }
+  /**
+   * Control watcher (R-2.4/R-2.5): the shim long-polls `GET /v1/agents/me/control?after=` on an
+   * SSE stream; `control: cancel|pause|stop|lease_lost` reaches the shim within ~1s so the
+   * runtime can `harness.cancel(reason, grace)`. Coercion: a single delivery wake is a durable
+   * control signal, not a side channel.
+   */
+  async control(agent: string, q: { after?: number }, principal: Principal): Promise<ControlReply> {
+    if (principal.kind === "operator") throw new ForbiddenError("operator cannot poll control");
+    const who = agentName(agent, "agent");
+    this.assertAgentMatches(principal, who);
+    if (q.after !== undefined && (!Number.isInteger(q.after) || q.after < 0)) throw new ValidationError("after: non-negative integer required");
+    const after = q.after ?? 0;
+    const { cursor, actions } = await this.store.control.poll(who, after);
+    return { cursor, actions: actions.map((a) => ({ type: a.type as ControlAction["type"], reason: a.reason, cursor: a.id })) };
+  }
+
+  async queueCancel(req: QueueCancelRequest, principal: Principal): Promise<{ cursor: number }> {
+    this.requireOperator(principal);
+    const who = agentName(req.agent, "agent");
+    const reason = text(req.reason, "reason");
+    const exists = await this.store.agents.get(who);
+    if (!exists) throw new NotFoundError(`unknown agent ${who}`);
+    const id = await this.store.control.queue({ agent: who, type: "cancel", reason });
+    return { cursor: id };
   }
   /**
    * Budgets (R-12 slice): E0 record-only initially, with E1 cooperative exhaustion on overrun.
