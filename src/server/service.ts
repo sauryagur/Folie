@@ -20,7 +20,20 @@ import {
   type SessionEventType,
   type SessionUsage,
   type SubmitGoalRequest,
+  type StartSessionRequest,
+  type SessionSummary,
+  type BudgetRecord,
+  type CarveOutRequest,
+  type CloseBudgetRequest,
+  type CreateBudgetRequest,
+  type RecordUsageRequest,
   type SubmitReportRequest,
+  type ClaimTaskRequest,
+  type ProposeTaskRequest,
+  type StartTaskRequest,
+  type SubmitTaskRequest,
+  type TaskClaim,
+  type TaskRecord,
   type SubscribeRequest,
   type ToolAttempt,
   type TopicInfo,
@@ -328,6 +341,139 @@ export class SwarmService {
   }
 
   /**
+   * Opens a server-owned running session and leases its messages. Idempotent on clientRequestId.
+   * The running session is the binding: transcript events and the terminal report must name it.
+   */
+  async startSession(req: StartSessionRequest, principal: Principal): Promise<SessionSummary> {
+    if (principal.kind === "operator") throw new ForbiddenError("operator cannot start agent session");
+    const agent = agentName(req.agent, "agent");
+    this.assertAgentMatches(principal, agent);
+    if (!Array.isArray(req.messageIds)) throw new ValidationError("messageIds: array required");
+    const ids = [...new Set(req.messageIds)];
+    if (ids.length === 0 || !ids.every(Number.isInteger)) throw new ValidationError("messageIds: non-empty integers required");
+    const clientRequestId = req.clientRequestId === undefined ? undefined : text(req.clientRequestId, "clientRequestId");
+    const workItemId = req.workItemId === undefined ? undefined : req.workItemId;
+    if (workItemId !== undefined && !Number.isInteger(workItemId)) throw new ValidationError("workItemId: integer required");
+    return withSpan(this.obs.tracer, "folie.session.start", { attributes: { agent_name: agent } }, async (span) => {
+      const s = await this.store.transaction(async (r) => {
+        if (clientRequestId !== undefined) {
+          const prior = await r.sessions.getByClientRequest(agent, clientRequestId);
+          if (prior) return prior;
+        }
+        if (workItemId !== undefined) {
+          const wi = await r.workItems.get(workItemId);
+          if (!wi) throw new ValidationError(`workItemId: unknown work item ${workItemId}`);
+        }
+        const created = await r.sessions.create({
+          agent,
+          startedAt: new Date().toISOString(),
+          messageIds: ids,
+          workItemId,
+          clientRequestId,
+        });
+        const leased = await r.messages.lease(agent, ids, created.id);
+        if (leased.length !== ids.length) throw new ValidationError("messageIds: not all are unleased messages of this agent");
+        return created;
+      });
+      span.setAttribute("session_id", s.sessionId);
+      return { sessionId: s.sessionId, agent: s.agent, state: s.state, workItemId: s.workItemId, startedAt: s.startedAt };
+    });
+  }
+  /**
+   * Task proposals and claims (R-8 slice): single conditional claim, fence-checked holder writes.
+   */
+  async proposeTask(req: ProposeTaskRequest, principal: Principal): Promise<TaskRecord> {
+    if (principal.kind === "operator") throw new ForbiddenError("operator cannot propose as agent");
+    const agent = agentName(req.agent, "agent");
+    this.assertAgentMatches(principal, agent);
+    if (!Number.isInteger(req.workItemId) || req.workItemId <= 0) throw new ValidationError("workItemId: positive integer required");
+    const title = text(req.title, "title");
+    const spec = (req.spec === undefined ? {} : (req.spec as unknown)) as Record<string, unknown>;
+    if (typeof spec !== "object" || spec === null || Array.isArray(spec)) throw new ValidationError("spec: object required");
+    const wi = await this.store.workItems.get(req.workItemId);
+    if (!wi) throw new ValidationError(`workItemId: unknown work item ${req.workItemId}`);
+    return this.store.tasks.propose({ workItemId: req.workItemId, title, spec });
+  }
+
+  async claimTask(req: ClaimTaskRequest, principal: Principal): Promise<TaskClaim> {
+    if (principal.kind === "operator") throw new ForbiddenError("operator cannot claim as agent");
+    const agent = agentName(req.agent, "agent");
+    this.assertAgentMatches(principal, agent);
+    if (!Number.isInteger(req.taskId) || req.taskId <= 0) throw new ValidationError("taskId: positive integer required");
+    const out = await this.store.tasks.claim(req.taskId, agent, 30_000);
+    if (!out) throw new ValidationError(`taskId: not available for claim ${req.taskId}`);
+    if ((out.task.owner ?? agent) !== agent) throw new ValidationError("taskId: claimed by another agent");
+    return { taskId: out.task.id, agent, role: "owner", fence: out.fence, state: "active" };
+  }
+
+  async startTask(req: StartTaskRequest, principal: Principal): Promise<TaskRecord> {
+    if (principal.kind === "operator") throw new ForbiddenError("operator cannot start as agent");
+    const agent = agentName(req.agent, "agent");
+    this.assertAgentMatches(principal, agent);
+    if (!Number.isInteger(req.taskId) || !Number.isInteger(req.fence)) throw new ValidationError("taskId/fence: integers required");
+    const t = await this.store.tasks.get(req.taskId);
+    if (!t || t.owner !== agent) throw new ValidationError("taskId: not claimed by this agent");
+    const started = await this.store.tasks.start(req.taskId, req.fence);
+    if (!started) throw new ValidationError("fence: stale");
+    return started;
+  }
+
+  async submitTask(req: SubmitTaskRequest, principal: Principal): Promise<TaskRecord> {
+    if (principal.kind === "operator") throw new ForbiddenError("operator cannot submit as agent");
+    const agent = agentName(req.agent, "agent");
+    this.assertAgentMatches(principal, agent);
+    if (!Number.isInteger(req.taskId) || !Number.isInteger(req.fence)) throw new ValidationError("taskId/fence: integers required");
+    const t = await this.store.tasks.get(req.taskId);
+    if (!t || t.owner !== agent) throw new ValidationError("taskId: not owned by this agent");
+    if (typeof req.result !== "object" || req.result === null || Array.isArray(req.result)) throw new ValidationError("result: object required");
+    const submitted = await this.store.tasks.submit(req.taskId, req.fence, req.result);
+    if (!submitted) throw new ValidationError("fence: stale");
+    return submitted;
+  }
+  /**
+   * Budgets (R-12 slice): E0 record-only initially, with E1 cooperative exhaustion on overrun.
+   * Operator-owned; agents record usage only through their own session reports (later slice).
+   */
+  private amountOf(v: unknown, field: string): number {
+    const n = typeof v === "number" ? v : Number(v);
+    if (!Number.isFinite(n) || n <= 0) throw new ValidationError(`${field}: positive number required`);
+    return n;
+  }
+
+  async createBudget(req: CreateBudgetRequest, principal: Principal): Promise<BudgetRecord> {
+    this.requireOperator(principal);
+    const name = text(req.name, "name");
+    const dim = text(req.dim, "dim");
+    if (!["usd","tokens","tool_calls","compute_s","storage_b","tasks","executions"].includes(dim)) throw new ValidationError(`dim: unknown dimension ${JSON.stringify(dim)}`);
+    return this.store.budgets.create({ name, limitAmount: this.amountOf(req.limitAmount, "limitAmount"), dim });
+  }
+
+  async carveOut(req: CarveOutRequest, principal: Principal): Promise<BudgetRecord> {
+    this.requireOperator(principal);
+    if (!Number.isInteger(req.parentId) || req.parentId <= 0) throw new ValidationError("parentId: positive integer required");
+    const name = text(req.name, "name");
+    const child = await this.store.budgets.carveOut(req.parentId, name, this.amountOf(req.limitAmount, "limitAmount"));
+    if (!child) throw new ValidationError("insufficient_budget: parent headroom cannot cover this carve-out");
+    return child;
+  }
+
+  async recordUsage(req: RecordUsageRequest, principal: Principal): Promise<BudgetRecord> {
+    this.requireOperator(principal);
+    if (!Number.isInteger(req.budgetId) || req.budgetId <= 0) throw new ValidationError("budgetId: positive integer required");
+    if (!["estimated","measured","external_charge"].includes(req.basis)) throw new ValidationError(`basis: unknown ${JSON.stringify(req.basis)}`);
+    const out = await this.store.budgets.commit(req.budgetId, this.amountOf(req.amount, "amount"), req.basis);
+    if (!out) throw new ValidationError(`budgetId: unknown or closed ${req.budgetId}`);
+    return out;
+  }
+
+  async closeBudget(req: CloseBudgetRequest, principal: Principal): Promise<BudgetRecord> {
+    this.requireOperator(principal);
+    if (!Number.isInteger(req.budgetId) || req.budgetId <= 0) throw new ValidationError("budgetId: positive integer required");
+    const out = await this.store.budgets.close(req.budgetId);
+    if (!out) throw new ValidationError(`budgetId: unknown or already closed ${req.budgetId}`);
+    return out;
+  }
+  /**
    * Records the session, acks what it consumed, and settles the work items behind those messages. A failed
    * session is not retried: its work parks in `blocked`, and the settlement span is marked failed so the trace shows it.
    */
@@ -342,15 +488,23 @@ export class SwarmService {
     const summary = text(req.summary, "summary");
     const startedAt = new Date(text(req.startedAt, "startedAt"));
     if (Number.isNaN(startedAt.getTime())) throw new ValidationError("startedAt: invalid timestamp");
-    const ids = [...new Set(req.messageIds)];
+    const ids = [...new Set(req.messageIds)] as number[];
     if (ids.length === 0 || !ids.every(Number.isInteger)) throw new ValidationError("messageIds: non-empty integers required");
     const usage = usageOf(req.usage);
+    const namedSessionId = req.sessionId === undefined ? undefined : Number(req.sessionId);
+    if (namedSessionId !== undefined && (!Number.isInteger(namedSessionId) || namedSessionId <= 0)) throw new ValidationError("sessionId: invalid");
 
     return withSpan(this.obs.tracer, "folie.report.settle", { attributes: { agent_name: agent, outcome: req.outcome } }, async (span) => {
       const { report, acked, itemIds } = await this.store.transaction(async (r) => {
         const acked = await r.messages.ack(agent, ids);
         if (acked.length !== ids.length) throw new ValidationError("messageIds: not all are unacked messages of this agent");
-        const report = await r.reports.record({ agent, startedAt: startedAt.toISOString(), outcome: req.outcome, summary, messageIds: ids, usage });
+        if (namedSessionId !== undefined) {
+          const s = await r.sessions.get(namedSessionId);
+          if (!s || s.agent !== agent || s.state !== "running") throw new ValidationError("sessionId: not a running session of this agent");
+          const settled = await r.sessions.settle(namedSessionId, req.outcome);
+          if (!settled) throw new ValidationError("sessionId: not a running session of this agent");
+        }
+        const report = await r.reports.record({ agent, startedAt: startedAt.toISOString(), outcome: req.outcome, summary, messageIds: ids, usage, sessionId: namedSessionId });
         await r.agents.touch(agent); // finishing a session is activity: the quiet period starts now
         const itemIds = [...new Set(acked.flatMap((m) => (m.workItemId === null ? [] : [m.workItemId])))];
         // One-shot failure: a failed session parks its work in 'blocked'; there is no retry.
@@ -409,6 +563,16 @@ export class SwarmService {
       if (typeof e.data !== "object" || e.data === null || Array.isArray(e.data)) throw new ValidationError("events.data: object required");
       if (JSON.stringify(e.data).length > MAX_EVENT_BYTES) throw new ValidationError(`events.data: over ${MAX_EVENT_BYTES} bytes`);
     }
+    const sid = b.sessionId;
+    const sidNum = /^\d+$/.test(sid) ? Number(sid) : null;
+    let sessionRow = sidNum !== null ? await this.store.sessions.get(sidNum).catch(() => null) : await this.store.sessions.getByPublicId(sid).catch(() => null);
+    if (!sessionRow) {
+      if (sidNum !== null) throw new ValidationError("sessionId: not a running session of this agent");
+      // Legacy free-form ids (pre-persistence agent loop): provision the running row now so events bind a session.
+      await this.store.agents.register(agent).catch(() => null);
+      sessionRow = await this.store.sessions.create({ agent, startedAt: new Date().toISOString(), messageIds: [], publicId: sid }).catch(() => null);
+    }
+    if (!sessionRow || sessionRow.agent !== agent || sessionRow.state !== "running") throw new ValidationError("sessionId: not a running session of this agent");
     const seqs = await this.store.events.append({ agent, sessionId: b.sessionId, scope: b.scope, traceId: activeSpanIds()?.trace_id ?? null, events: b.events });
     const fresh = new Set(seqs);
     for (const e of b.events) {

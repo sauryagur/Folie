@@ -76,11 +76,90 @@ export interface SessionUsage {
 
 export interface SubmitReportRequest {
   agent: string;
+  sessionId?: string;
   startedAt: string;
   outcome: Outcome;
   summary: string;
   messageIds: number[];
   usage?: SessionUsage;
+}
+export interface StartSessionRequest {
+  agent: string;
+  messageIds: number[];
+  clientRequestId?: string;
+  workItemId?: number;
+}
+
+export interface SessionSummary {
+  sessionId: string;
+  agent: string;
+  state: string;
+  workItemId: number | null;
+  startedAt: string;
+}
+export interface TaskRecord {
+  id: number;
+  workItemId: number;
+  title: string;
+  status: string;
+  fence: number;
+  owner: string | null;
+  spec: Record<string, unknown>;
+}
+export interface ProposeTaskRequest {
+  agent: string;
+  workItemId: number;
+  title: string;
+  spec?: Record<string, unknown>;
+}
+export interface ClaimTaskRequest {
+  agent: string;
+  taskId: number;
+}
+export interface TaskClaim {
+  taskId: number;
+  agent: string;
+  role: string;
+  fence: number;
+  state: string;
+}
+export interface StartTaskRequest {
+  agent: string;
+  taskId: number;
+  fence: number;
+}
+export interface SubmitTaskRequest {
+  agent: string;
+  taskId: number;
+  fence: number;
+  result: Record<string, unknown>;
+}
+export interface BudgetRecord {
+  id: number;
+  name: string;
+  dim: string;
+  limitAmount: number;
+  reserved: number;
+  spent: number;
+  status: string;
+}
+export interface CreateBudgetRequest {
+  name: string;
+  limitAmount: number;
+  dim: string;
+}
+export interface CarveOutRequest {
+  parentId: number;
+  name: string;
+  limitAmount: number;
+}
+export interface RecordUsageRequest {
+  budgetId: number;
+  amount: number;
+  basis: "estimated" | "measured" | "external_charge";
+}
+export interface CloseBudgetRequest {
+  budgetId: number;
 }
 
 /** Which mail a session may pick up mid-run: its own work item's, plus mail that belongs to no work item. */

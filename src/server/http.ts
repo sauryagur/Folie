@@ -91,6 +91,7 @@ function routes(svc: SwarmService, ops: AgentOps, store: Store, operatorToken: s
     ["POST", /^\/v1\/topics\/([^/]+)\/unsubscribe$/, async (m, req, p) => svc.unsubscribe(decodeURIComponent(m[1]!), await jsonBody(req), p)],
     ["POST", /^\/v1\/topics\/([^/]+)\/publish$/, async (m, req, p) => svc.publish(decodeURIComponent(m[1]!), await jsonBody(req), p)],
     ["POST", /^\/v1\/sessions\/events$/, async (_, req, p) => svc.ingestEvents(await jsonBody(req), p)],
+    ["POST", /^\/v1\/sessions$/, async (_, req, p) => svc.startSession(await jsonBody(req), p)],
     ["GET", /^\/v1\/sessions\/events$/, (_, req, p) => {
       const q = queryParams(req);
       return svc.events({

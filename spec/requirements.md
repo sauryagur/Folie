@@ -59,6 +59,10 @@ Status: **normative**. This is the specification Folie must meet. Architecture a
 | R-6.4 | A `lost` execution MUST revoke its claims immediately, abandon its session, return deliveries, and restore the workspace from the best available source with an event when empty | kill execution *(live)* |
 | R-6.5 | Execution retirement MUST respect `workspace_policy`; an execution MUST NOT be terminated while a required archive is missing | retire tests |
 | R-6.6 | Background loops MUST be leader-elected so additional API replicas cannot double-dispatch | two instances, one database |
+| R-6.7 | `spec.debug` MUST be `false` in every provider manifest; this MUST be enforced by a test that fails if any manifest or adapter defaults it to true | manifest test |
+| R-6.8 | Every task MUST carry a `ResourcesSpec` (CPU/memory) set from per-agent policy, not left unlimited | task-spec test |
+| R-6.9 | Egress MUST be profile-based (`dev-full-trust` for development; named-host/per-port production profiles), with a documented owner and re-test cadence for private-IP exceptions (Substrate #2086) | policy test + deployment note |
+| R-6.10 | Retirement MUST NOT destroy the content-addressed artifact store or scoped memory service; workspace archive policy (`archive` vs `scratch`) MUST gate termination (see R-3.6, R-4.x) | retire tests |
 
 ### Goals and tasks ([`architecture/work-and-coordination.md`](../architecture/work-and-coordination.md), [`spec/domain-model.md`](domain-model.md) §4)
 

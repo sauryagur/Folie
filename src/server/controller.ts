@@ -5,7 +5,7 @@
 // Reconciliation reads the provider's actual state via list() once per pass (R-6.2).
 import type { Logger } from "../shared/logger";
 import type { ExecutionProvider, ExecutionState, ExecutionSpec, NetworkPolicy, ProviderRef } from "./provider";
-import type { AgentRepo, AuthRepo } from "./store";
+import type { AgentRepo, AuthRepo, ExecutionRegistryRepo } from "./store";
 import { AGENT_NAME, type AgentOp, type AgentOpResult } from "../shared/types";
 import { contextFrom, storableTrace, withSpan } from "../shared/trace";
 import { NotFoundError, ValidationError } from "./errors";
@@ -29,6 +29,7 @@ export interface ControllerConfig {
 
 export type ControllerAgents = Pick<AgentRepo, "wakeDemand" | "retrace" | "idle" | "setState" | "touch">;
 export type ControllerAuth = Pick<AuthRepo, "mintAgentToken" | "upsertExecution" | "setExecutionState" | "getAgentCredential" | "revokeAgentTokens">;
+export type ControllerRegistry = Pick<ExecutionRegistryRepo, "record" | "listLive" | "setState" | "markLostForAgent" | "get">;
 
 export class Controller implements AgentOps {
   constructor(
@@ -38,6 +39,7 @@ export class Controller implements AgentOps {
     private readonly log: Logger = console,
     private readonly obs: Observability = noopObservability(),
     private readonly auth?: ControllerAuth,
+    private readonly registry?: ControllerRegistry,
   ) {}
 
   /** One pass. A failure on one agent never stops the others. */
@@ -50,6 +52,16 @@ export class Controller implements AgentOps {
     for (const name of suspendAfter) await this.guard("suspend", name, async () => this.suspend(name, snapshot.get(name) ?? (await this.inspectAgent(name))));
     const deleteAfter = await this.agents.idle("suspended", this.cfg.deleteAfterSec);
     for (const name of deleteAfter) await this.guard("retire", name, async () => this.retire(name, snapshot.get(name) ?? (await this.inspectAgent(name))));
+    // Ghost detection (R-6.3): a recorded running execution the provider no longer reports is lost.
+    // Provisioning rows are excluded: ensure() may not have landed yet on this pass.
+    if (this.registry) {
+      for (const live of await this.registry.listLive().catch(() => [])) {
+        if (!snapshot.has(live.agent) && live.state === "running") {
+          await this.registry.setState(live.id, "lost").catch(() => undefined);
+          this.log.log(`controller: ${live.agent} execution ${live.id} lost (not reported by provider)`);
+        }
+      }
+    }
   }
 
   /** Operator steering. Every op leaves the agent's recorded state matching the provider, so the sweep does not fight it. */
@@ -127,6 +139,7 @@ export class Controller implements AgentOps {
             executionId = generateExecutionId();
             const token = await this.auth.mintAgentToken(name, executionId, generation);
             await this.auth.upsertExecution(name, executionId, generation, "running");
+            if (this.registry) await this.registry.record({ id: executionId, agent: name, generation, state: "running", providerRef: { key: name, namespace: this.cfg.namespace } }).catch(() => undefined);
             await this.provider.ensure(this.specFor(name, token, executionId));
           } else {
             await this.provider.ensure(this.specFor(name));
@@ -142,6 +155,8 @@ export class Controller implements AgentOps {
         try {
           await this.provider.start(ref);
           await this.agents.setState(name, "running");
+          if (this.registry && executionId) await this.registry.setState(executionId, "running").catch(() => undefined);
+          if (this.registry) { const live = await this.registry.listLive().catch(() => []); for (const e of live) { if (e.agent === name) await this.registry.setState(e.id, "running").catch(() => undefined); } }
         } catch (e) {
           this.log.error(`controller: start ${this.cfg.namespace}/${name} failed:`, e);
         }

@@ -1,16 +1,18 @@
 import type {
   AgentInfo,
+  BudgetRecord,
   Message,
   Report,
   SessionEvent,
   SessionEventType,
   SessionUsage,
+  TaskRecord,
   TopicInfo,
   WorkItem,
   WorkItemState,
 } from "../shared/types";
 import type { Database, Queryable, Row } from "./db";
-import type { AgentRepo, AuthRepo, EventRepo, MessageRepo, Repos, ReportRepo, Store, StoredTrace, TopicRepo, WorkItemRepo } from "./store";
+import type { AgentRepo, AuthRepo, BudgetRepo, EventRepo, ExecutionRegistryRepo, MessageRepo, Repos, ReportRepo, SessionRecord, SessionRepo, Store, StoredTrace, TaskRepo, TopicRepo, WorkItemRepo } from "./store";
 import { generateExecutionId, generateToken, hashToken } from "./auth";
 
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
@@ -103,7 +105,7 @@ const messages = (q: Queryable): MessageRepo => ({
       query.workItem === undefined ? "" : query.workItem === "none" ? "AND work_item_id IS NULL" : "AND (work_item_id IS NULL OR work_item_id = $2)";
     const args = typeof query.workItem === "number" ? [to, query.workItem] : [to];
     const { rows } = await q.query(
-      `SELECT ${MESSAGE_COLS} FROM messages WHERE recipient = $1 AND acked_at IS NULL ${scope} ORDER BY id`,
+      `SELECT ${MESSAGE_COLS} FROM messages WHERE recipient = $1 AND acked_at IS NULL AND session_id IS NULL ${scope} ORDER BY id`,
       args,
     );
     return rows.map(toMessage);
@@ -113,6 +115,14 @@ const messages = (q: Queryable): MessageRepo => ({
       `UPDATE messages SET acked_at = now()
        WHERE recipient = $1 AND acked_at IS NULL AND id = ANY($2::int[]) RETURNING ${MESSAGE_COLS}`,
       [to, ids],
+    );
+    return rows.map(toMessage);
+  },
+  async lease(to, ids, sessionId) {
+    const { rows } = await q.query(
+      `UPDATE messages SET session_id = $3, leased_at = now()
+       WHERE recipient = $1 AND acked_at IS NULL AND session_id IS NULL AND id = ANY($2::int[]) RETURNING ${MESSAGE_COLS}`,
+      [to, ids, sessionId],
     );
     return rows.map(toMessage);
   },
@@ -245,18 +255,18 @@ const agents = (q: Queryable): AgentRepo => ({
 });
 
 const reports = (q: Queryable): ReportRepo => ({
-  async record({ agent, startedAt, outcome, summary, messageIds, usage }) {
-    const s = await q.query(
-      "INSERT INTO sessions (agent, started_at, message_ids) VALUES ($1,$2,$3::int[]) RETURNING id",
-      [agent, startedAt, messageIds],
-    );
+  async record({ agent, startedAt, outcome, summary, messageIds, usage, sessionId }) {
+    const sid = sessionId ?? (await q.query(
+      "INSERT INTO sessions (agent, started_at, message_ids, state, outcome, ended_at) VALUES ($1,$2,$3::int[],'settled',$4,now()) RETURNING id",
+      [agent, startedAt, messageIds, outcome],
+    )).rows[0]!.id as number;
     const { rows } = await q.query(
       `INSERT INTO reports (session_id, outcome, summary, prompt_tokens, completion_tokens, cost_usd, tool_calls, tool_failures)
        VALUES ($1,$2,$3,$6,$7,$8,$9,$10)
        RETURNING id, $4::text AS agent, outcome, summary, $5::int[] AS message_ids, created_at,
                  prompt_tokens, completion_tokens, cost_usd, tool_calls, tool_failures`,
       [
-        s.rows[0]!.id,
+        sid,
         outcome,
         summary,
         agent,
@@ -430,6 +440,192 @@ const auth = (q: Queryable): AuthRepo => ({
     return { generation: r.credential_generation as number, status: r.status as string };
   },
 });
+const SESSION_COLS = "id, agent, state, outcome, work_item_id, started_at, ended_at, client_request_id, public_id";
+const toSession = (r: Row): SessionRecord => ({
+  id: r.id as number,
+  sessionId: (r.public_id as string | null) ?? String(r.id),
+  agent: r.agent as string,
+  state: r.state as string,
+  outcome: (r.outcome as string | null) ?? null,
+  workItemId: (r.work_item_id as number | null) ?? null,
+  startedAt: iso(r.started_at),
+  endedAt: r.ended_at ? iso(r.ended_at) : null,
+  clientRequestId: (r.client_request_id as string | null) ?? null,
+});
+const sessions = (q: Queryable): SessionRepo => ({
+  async create({ agent, startedAt, messageIds, workItemId, clientRequestId, publicId }) {
+    const { rows } = await q.query(
+      `INSERT INTO sessions (agent, started_at, message_ids, state, work_item_id, client_request_id, public_id)
+       VALUES ($1,$2,$3::int[],'running',$4,$5,$6) RETURNING ${SESSION_COLS}`,
+      [agent, startedAt, messageIds, workItemId ?? null, clientRequestId ?? null, publicId ?? null],
+    );
+    return toSession(rows[0]!);
+  },
+  async get(id) {
+    const { rows } = await q.query(`SELECT ${SESSION_COLS} FROM sessions WHERE id = $1`, [id]);
+    return rows[0] ? toSession(rows[0]) : null;
+  },
+  async getByPublicId(publicId) {
+    const { rows } = await q.query(`SELECT ${SESSION_COLS} FROM sessions WHERE public_id = $1`, [publicId]);
+    return rows[0] ? toSession(rows[0]) : null;
+  },
+  async getByClientRequest(agent, clientRequestId) {
+    const { rows } = await q.query(
+      `SELECT ${SESSION_COLS} FROM sessions WHERE agent = $1 AND client_request_id = $2`,
+      [agent, clientRequestId],
+    );
+    return rows[0] ? toSession(rows[0]) : null;
+  },
+  async settle(id, outcome) {
+    const { rows } = await q.query(
+      `UPDATE sessions SET state = 'settled', outcome = $2, ended_at = now()
+       WHERE id = $1 AND state = 'running' RETURNING ${SESSION_COLS}`,
+      [id, outcome],
+    );
+    return rows[0] ? toSession(rows[0]) : null;
+  },
+});
+const registry = (q: Queryable): ExecutionRegistryRepo => ({
+  async record({ id, agent, generation, state, providerRef }) {
+    await q.query(
+      `INSERT INTO executions (id, agent_name, generation, state, epoch, provider_ref, started_at)
+       VALUES ($1,$2,$3,$4,1,$5,now())
+       ON CONFLICT (id) DO UPDATE SET agent_name=$2, generation=$3, state=$4, provider_ref=$5`,
+      [id, agent, generation, state, providerRef === undefined ? null : JSON.stringify(providerRef)],
+    );
+  },
+  async get(id) {
+    const { rows } = await q.query("SELECT id, agent_name, state, epoch FROM executions WHERE id = $1", [id]);
+    return rows[0] ? { id: String(rows[0].id), agent: String(rows[0].agent_name), state: String(rows[0].state), epoch: Number(rows[0].epoch) } : null;
+  },
+  async listLive() {
+    const { rows } = await q.query("SELECT id, agent_name, state FROM executions WHERE state IN ('running','suspended','provisioning') ORDER BY created_at");
+    return rows.map((r) => ({ id: String(r.id), agent: String(r.agent_name), state: String(r.state) }));
+  },
+  async setState(id, state) {
+    if (state === "running") {
+      await q.query("UPDATE executions SET state=$2, epoch = epoch + 1 WHERE id=$1 AND state <> $2", [id, state]);
+    } else {
+      await q.query("UPDATE executions SET state=$2, ended_at = CASE WHEN $2 IN ('terminated','lost','failed') THEN now() ELSE ended_at END WHERE id=$1", [id, state]);
+    }
+  },
+  async markLostForAgent(agent) {
+    await q.query("UPDATE executions SET state='lost', ended_at=now() WHERE agent_name=$1 AND state IN ('running','suspended','provisioning')", [agent]);
+  },
+});
+const TASK_COLS = "id, work_item_id, title, spec, status, fence, owner";
+const toTask = (r: Row) => ({
+  id: r.id as number,
+  workItemId: r.work_item_id as number,
+  title: r.title as string,
+  status: r.status as string,
+  fence: Number(r.fence),
+  owner: (r.owner as string | null) ?? null,
+  spec: (typeof r.spec === "string" ? JSON.parse(r.spec) : r.spec) as Record<string, unknown>,
+});
+const tasks = (q: Queryable): TaskRepo => ({
+  async propose({ workItemId, title, spec }) {
+    const { rows } = await q.query(
+      `INSERT INTO tasks (work_item_id, title, spec, status) VALUES ($1,$2,$3::jsonb,'available') RETURNING ${TASK_COLS}`,
+      [workItemId, title, JSON.stringify(spec)],
+    );
+    return toTask(rows[0]!);
+  },
+  async get(id) {
+    const { rows } = await q.query(`SELECT ${TASK_COLS} FROM tasks WHERE id = $1`, [id]);
+    return rows[0] ? toTask(rows[0]) : null;
+  },
+  async claim(taskId, agent, leaseMs) {
+    const leaseSec = `${Math.max(1, Math.round(leaseMs / 1000))} seconds`;
+    const { rows } = await q.query(
+      `UPDATE tasks SET status='claimed', fence = fence + 1, owner=$2, lease_expires_at = now() + ($3::text)::interval
+       WHERE id=$1 AND status='available' RETURNING ${TASK_COLS}`,
+      [taskId, agent, leaseSec],
+    );
+    if (!rows[0]) return null;
+    const task = toTask(rows[0]);
+    await q.query(
+      `INSERT INTO task_claims (task_id, agent, role, fence, lease_expires_at) VALUES ($1,$2,'owner',$3, now() + ($4::text)::interval)`,
+      [taskId, agent, task.fence, leaseSec],
+    );
+    return { task, fence: task.fence };
+  },
+  async start(taskId, fence) {
+    const { rows } = await q.query(
+      `UPDATE tasks SET status='running' WHERE id=$1 AND status='claimed' AND fence=$2 RETURNING ${TASK_COLS}`,
+      [taskId, fence],
+    );
+    return rows[0] ? toTask(rows[0]) : null;
+  },
+  async submit(taskId, fence, _result) {
+    const { rows } = await q.query(
+      `UPDATE tasks SET status='submitted' WHERE id=$1 AND status='running' AND fence=$2 RETURNING ${TASK_COLS}`,
+      [taskId, fence],
+    );
+    if (!rows[0]) return null;
+    await q.query(`UPDATE task_claims SET state='completed', ended_at=now() WHERE task_id=$1 AND state='active'`, [taskId]);
+    return toTask(rows[0]);
+  },
+});
+const BUDGET_COLS = "id, name, dim, limit_amount, reserved, spent, status, parent_id";
+const toBudget = (r: Row): BudgetRecord => ({
+  id: r.id as number,
+  name: r.name as string,
+  dim: r.dim as string,
+  limitAmount: Number(r.limit_amount),
+  reserved: Number(r.reserved),
+  spent: Number(r.spent),
+  status: r.status as string,
+});
+const budgets = (q: Queryable): BudgetRepo => ({
+  async create({ parentId, name, limitAmount, dim }) {
+    const { rows } = await q.query(
+      `INSERT INTO budgets (parent_id, name, dim, limit_amount) VALUES ($1,$2,$3,$4) RETURNING ${BUDGET_COLS}`,
+      [parentId ?? null, name, dim, limitAmount],
+    );
+    return toBudget(rows[0]!);
+  },
+  async get(id) {
+    const { rows } = await q.query(`SELECT ${BUDGET_COLS} FROM budgets WHERE id = $1`, [id]);
+    return rows[0] ? toBudget(rows[0]) : null;
+  },
+  async carveOut(parentId, name, limitAmount) {
+    const { rows } = await q.query(
+      `UPDATE budgets SET reserved = reserved + $2 WHERE id=$1 AND limit_amount - reserved - spent >= $2 RETURNING ${BUDGET_COLS}`,
+      [parentId, limitAmount],
+    );
+    if (!rows[0]) return null;
+    const parent = toBudget(rows[0]);
+    const { rows: child } = await q.query(
+      `INSERT INTO budgets (parent_id, name, dim, limit_amount) VALUES ($1,$2,$3,$4) RETURNING ${BUDGET_COLS}`,
+      [parentId, name, parent.dim, limitAmount],
+    );
+    return toBudget(child[0]!);
+  },
+  async commit(budgetId, amount, basis) {
+    await q.query(`INSERT INTO usage_records (budget_id, amount, basis) VALUES ($1,$2,$3)`, [budgetId, amount, basis]);
+    const { rows } = await q.query(
+      `UPDATE budgets SET spent = spent + $2,
+         status = CASE WHEN spent + $2 > limit_amount THEN 'exhausted' ELSE status END
+       WHERE id=$1 AND status <> 'closed' RETURNING ${BUDGET_COLS}`,
+      [budgetId, amount],
+    );
+    return rows[0] ? toBudget(rows[0]) : null;
+  },
+  async close(budgetId) {
+    const { rows } = await q.query(`SELECT ${BUDGET_COLS} FROM budgets WHERE id=$1`, [budgetId]);
+    const b = rows[0] ? toBudget(rows[0]) : null;
+    if (!b) return null;
+    const closed = await q.query(`UPDATE budgets SET status='closed' WHERE id=$1 AND status<>'closed' RETURNING ${BUDGET_COLS}`, [budgetId]);
+    if (!closed.rows[0]) return null;
+    const { rows: parent } = await q.query(`SELECT parent_id FROM budgets WHERE id=$1`, [budgetId]);
+    const pid = parent[0]?.parent_id as number | null | undefined;
+    if (pid !== null && pid !== undefined) {
+      await q.query(`UPDATE budgets SET reserved = reserved - $2, spent = spent + $3 WHERE id=$1`, [pid, b.limitAmount, b.spent]);
+    }
+    return toBudget(closed.rows[0]!);
+  },
+});
 
 const bind = (q: Queryable): Repos => ({
   messages: messages(q),
@@ -439,6 +635,10 @@ const bind = (q: Queryable): Repos => ({
   topics: topics(q),
   events: events(q),
   auth: auth(q),
+  sessions: sessions(q),
+  registry: registry(q),
+  tasks: tasks(q),
+  budgets: budgets(q),
 });
 
 export function pgStore(db: Database): Store {

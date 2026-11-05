@@ -1,4 +1,3 @@
-// Persistence ports. The service and controller depend on these, never on SQL.
 import type {
   AgentInfo,
   EventQuery,
@@ -11,6 +10,8 @@ import type {
   SessionEvent,
   SessionEventInput,
   SessionUsage,
+  BudgetRecord,
+  TaskRecord,
   TopicInfo,
   WorkItem,
   WorkItemState,
@@ -30,8 +31,59 @@ export interface MessageRepo {
   /** Acks exactly the given unacked messages of `to`; returns those actually acked. */
   ack(to: string, ids: number[]): Promise<Message[]>;
   /** The audit log, ascending by id, capped at `limit` (default 100, max 500). See MessageQuery. */
+  /** Leases unacked messages of `to` to a session; returns those actually leased. */
+  lease(to: string, ids: number[], sessionId: number): Promise<Message[]>;
+  /** The audit log, ascending by id, capped at `limit` (default 100, max 500). See MessageQuery. */
   list(q: MessageQuery): Promise<Message[]>;
 }
+
+export interface SessionRecord {
+  id: number;
+  sessionId: string;
+  agent: string;
+  state: string;
+  outcome: string | null;
+  workItemId: number | null;
+  startedAt: string;
+  endedAt: string | null;
+  clientRequestId: string | null;
+}
+
+export interface SessionRepo {
+  /** Creates a running session; returns it. Server-generated id is the session id. */
+  create(b: { agent: string; startedAt: string; messageIds: number[]; workItemId?: number; clientRequestId?: string; publicId?: string }): Promise<SessionRecord>;
+  get(id: number): Promise<SessionRecord | null>;
+  getByPublicId(publicId: string): Promise<SessionRecord | null>;
+  getByClientRequest(agent: string, clientRequestId: string): Promise<SessionRecord | null>;
+  settle(id: number, outcome: string): Promise<SessionRecord | null>;
+}
+export interface TaskRepo {
+  propose(b: { workItemId: number; title: string; spec: Record<string, unknown> }): Promise<TaskRecord>;
+  get(id: number): Promise<TaskRecord | null>;
+  /** Single conditional claim: available -> claimed with fence+1. Returns null on conflict. */
+  claim(taskId: number, agent: string, leaseMs: number): Promise<{ task: TaskRecord; fence: number } | null>;
+  start(taskId: number, fence: number): Promise<TaskRecord | null>;
+  submit(taskId: number, fence: number, result: Record<string, unknown>): Promise<TaskRecord | null>;
+}
+
+export interface ExecutionRegistryRepo {
+  record(r: { id: string; agent: string; generation: number; state: string; providerRef?: unknown }): Promise<void>;
+  get(id: string): Promise<{ id: string; agent: string; state: string; epoch: number } | null>;
+  listLive(): Promise<{ id: string; agent: string; state: string }[]>;
+  setState(id: string, state: string): Promise<void>;
+  markLostForAgent(agent: string): Promise<void>;
+}
+export interface BudgetRepo {
+  create(b: { parentId?: number; name: string; limitAmount: number; dim: string }): Promise<BudgetRecord>;
+  get(id: number): Promise<BudgetRecord | null>;
+  /** Carve-out: single conditional reservation of parent headroom. */
+  carveOut(parentId: number, name: string, limitAmount: number): Promise<BudgetRecord | null>;
+  /** Commit usage; flips exhausted on overrun. */
+  commit(budgetId: number, amount: number, basis: "estimated" | "measured" | "external_charge"): Promise<BudgetRecord | null>;
+  /** Close: return unspent to parent and mark closed. */
+  close(budgetId: number): Promise<BudgetRecord | null>;
+}
+
 
 export interface WorkItemRepo {
   create(goal: string, state: WorkItemState, trace?: StoredTrace): Promise<WorkItem>;
@@ -102,7 +154,7 @@ export interface AuthRepo {
 }
 
 export interface ReportRepo {
-  record(r: { agent: string; startedAt: string; outcome: Outcome; summary: string; messageIds: number[]; usage?: SessionUsage }): Promise<Report>;
+  record(r: { agent: string; startedAt: string; outcome: Outcome; summary: string; messageIds: number[]; usage?: SessionUsage; sessionId?: number }): Promise<Report>;
   /** Newest first. */
   list(q: { agent?: string; limit?: number }): Promise<Report[]>;
 }
@@ -137,6 +189,10 @@ export interface Repos {
   topics: TopicRepo;
   events: EventRepo;
   auth: AuthRepo;
+  sessions: SessionRepo;
+  registry: ExecutionRegistryRepo;
+  tasks: TaskRepo;
+  budgets: BudgetRepo;
 }
 
 export interface Store extends Repos {

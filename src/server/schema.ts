@@ -108,6 +108,79 @@ CREATE INDEX IF NOT EXISTS executions_agent ON executions (agent_name, created_a
 -- Credential generations for agents: bumped on revocation/retire/delete/loss.
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS credential_generation int NOT NULL DEFAULT 1;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+ALTER TABLE executions ADD COLUMN IF NOT EXISTS epoch int NOT NULL DEFAULT 0;
+ALTER TABLE executions ADD COLUMN IF NOT EXISTS provider_ref jsonb;
+ALTER TABLE executions ADD COLUMN IF NOT EXISTS started_at timestamptz;
+ALTER TABLE executions ADD COLUMN IF NOT EXISTS generation int NOT NULL DEFAULT 1;
+CREATE INDEX IF NOT EXISTS executions_agent_state ON executions (agent_name, state);
+-- Server-owned persisted sessions: a running row exists before any transcript event.
+ALTER TABLE sessions ALTER COLUMN ended_at DROP DEFAULT;
+ALTER TABLE sessions ALTER COLUMN ended_at DROP NOT NULL;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS state text NOT NULL DEFAULT 'settled' CHECK (state IN ('running','settled','abandoned'));
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS outcome text;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS work_item_id int REFERENCES work_items(id);
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS client_request_id text;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS public_id text;
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_public_id ON sessions (public_id) WHERE public_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_client_request ON sessions (agent, client_request_id) WHERE client_request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS sessions_agent ON sessions (agent, id DESC);
+CREATE TABLE IF NOT EXISTS budgets (
+  id          serial PRIMARY KEY,
+  parent_id   int REFERENCES budgets(id),
+  name        text NOT NULL,
+  dim         text NOT NULL CHECK (dim IN ('usd','tokens','tool_calls','compute_s','storage_b','tasks','executions')),
+  limit_amount numeric NOT NULL,
+  reserved    numeric NOT NULL DEFAULT 0,
+  spent       numeric NOT NULL DEFAULT 0,
+  status      text NOT NULL DEFAULT 'active' CHECK (status IN ('active','exhausted','closed')),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS budgets_parent ON budgets (parent_id);
+CREATE TABLE IF NOT EXISTS budget_reservations (
+  id          serial PRIMARY KEY,
+  budget_id   int NOT NULL REFERENCES budgets(id),
+  amount      numeric NOT NULL,
+  state       text NOT NULL DEFAULT 'active' CHECK (state IN ('active','released')),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS usage_records (
+  id          serial PRIMARY KEY,
+  budget_id   int NOT NULL REFERENCES budgets(id),
+  amount      numeric NOT NULL,
+  basis       text NOT NULL CHECK (basis IN ('estimated','measured','external_charge')),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS tasks (
+  id          serial PRIMARY KEY,
+  work_item_id int NOT NULL REFERENCES work_items(id),
+  title       text NOT NULL,
+  spec        jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status      text NOT NULL DEFAULT 'available' CHECK (status IN ('proposed','accepted','available','claimed','running','blocked','submitted','completed','verified','failed','cancelled','superseded','rejected')),
+  fence       bigint NOT NULL DEFAULT 0,
+  owner       text REFERENCES agents(name),
+  lease_expires_at timestamptz,
+  attempt     int NOT NULL DEFAULT 0,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS tasks_available ON tasks (work_item_id, status, id) WHERE status IN ('proposed','available');
+CREATE TABLE IF NOT EXISTS task_claims (
+  id          serial PRIMARY KEY,
+  task_id     int NOT NULL REFERENCES tasks(id),
+  agent       text NOT NULL REFERENCES agents(name),
+  role        text NOT NULL DEFAULT 'owner' CHECK (role IN ('owner','contributor','reviewer','verifier')),
+  fence       bigint NOT NULL,
+  state       text NOT NULL DEFAULT 'active' CHECK (state IN ('active','completed','released','expired','revoked','superseded')),
+  granted_at  timestamptz NOT NULL DEFAULT now(),
+  lease_expires_at timestamptz,
+  ended_at    timestamptz,
+  end_reason  text
+);
+CREATE UNIQUE INDEX IF NOT EXISTS claims_one_active_owner ON task_claims (task_id) WHERE role = 'owner' AND state = 'active';
+CREATE INDEX IF NOT EXISTS claims_task ON task_claims (task_id, state);
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS session_id int REFERENCES sessions(id);
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS leased_at timestamptz;
+CREATE INDEX IF NOT EXISTS messages_leased ON messages (session_id) WHERE session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS messages_unleased ON messages (recipient, id) WHERE acked_at IS NULL AND session_id IS NULL;
 -- (agents.state remains the execution view for compatibility; status is 'active' | 'retired' for token checks)
 `;
 
