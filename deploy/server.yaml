@@ -45,6 +45,11 @@ spec:
               value: ax-server.ax-system.svc.cluster.local:8080
             - name: FOLIE_AGENT_IMAGE
               value: ${FOLIE_AGENT_IMAGE}
+            - name: FOLIE_OPERATOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: folie-operator-token
+                  key: token
           ports:
             - containerPort: 8080
               name: http

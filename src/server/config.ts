@@ -13,6 +13,8 @@ export interface ServerConfig {
   substrate: SubstrateOptions;
   /** Collector base URL (OTLP/HTTP). Unset: spans still propagate, nothing is exported. */
   otlpEndpoint?: string;
+  /** Operator bearer token (FOLIE_OPERATOR_TOKEN). Required for deployment; compared constant-time, stored hashed. */
+  operatorToken: string;
 }
 
 /** Vars named FOLIE_AGENT_ENV_<NAME> are forwarded into every agent task as <NAME> (e.g. the LLM key). */
@@ -51,6 +53,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
   const suspendAfterSec = positiveInt(env, "FOLIE_SUSPEND_AFTER_S", 60);
   const deleteAfterSec = positiveInt(env, "FOLIE_DELETE_AFTER_S", 3600);
   if (deleteAfterSec <= suspendAfterSec) throw new Error("FOLIE_DELETE_AFTER_S must exceed FOLIE_SUSPEND_AFTER_S");
+  const operatorToken = required(env, "FOLIE_OPERATOR_TOKEN");
   return {
     port: Number(env.PORT ?? 8080),
     databaseUrl: required(env, "DATABASE_URL"),
@@ -58,6 +61,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
     axAddr: env.AX_ADDR ?? "ax-server.ax-system.svc:8080",
     reconcileMs: Number(env.FOLIE_RECONCILE_MS ?? 2000),
     maxAgents: positiveInt(env, "FOLIE_MAX_AGENTS", 8),
+    operatorToken,
     controller: {
       atespace: env.FOLIE_ATESPACE ?? "folie",
       image: required(env, "FOLIE_AGENT_IMAGE"),

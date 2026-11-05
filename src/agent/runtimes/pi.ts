@@ -87,7 +87,7 @@ export class PiRuntime implements Runtime {
       swarmTool({
         name: "message_send",
         label: "Send message",
-        description: "Send a message to another agent's inbox (or your own, to start a fresh phase). This wakes that agent, creating it if needed.",
+        description: "Send a message to another agent's inbox (or your own, to start a fresh phase). This wakes that agent.",
         parameters: Type.Object({ to: Type.String(), body: Type.String() }),
         replay: "never",
         execute: async (_id, p) => {

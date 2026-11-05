@@ -36,11 +36,16 @@ export class FolieClient {
   constructor(
     private readonly baseUrl: string,
     private readonly fetchFn: typeof fetch = fetch,
+    private readonly bearerToken?: string,
   ) {}
 
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
     // The active span, if any, rides along as traceparent/tracestate: the server's work joins the caller's trace.
-    const headers = { ...(body === undefined ? {} : { "content-type": "application/json" }), ...traceHeaders() };
+    const headers = {
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...traceHeaders(),
+      ...(this.bearerToken ? { authorization: `Bearer ${this.bearerToken}` } : {}),
+    };
     const res = await this.fetchFn(this.baseUrl + path, {
       method,
       headers,
@@ -53,6 +58,9 @@ export class FolieClient {
 
   submitGoal(r: SubmitGoalRequest) {
     return this.req<{ workItem: WorkItem; message: Message | null }>("POST", "/v1/work-items", r);
+  }
+  registerAgent(name: string) {
+    return this.req<{ name: string; state: string }>("POST", "/v1/agents", { name });
   }
   workItem(id: number) {
     return this.req<WorkItemView>("GET", `/v1/work-items/${id}`);

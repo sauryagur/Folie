@@ -1,14 +1,20 @@
 #!/usr/bin/env bun
 import { agents, publish, status, submit, subscribe, topics, unsubscribe, type Api } from "./cli/commands";
 import { down, up } from "./host/cluster";
-import { withServerUrl } from "./host/portforward";
+import { operatorTokenFromEnvOrFile, withServerUrl } from "./host/portforward";
 import { FolieClient } from "./shared/client";
 
 type Command = (args: string[]) => Promise<number | void>;
 
+function operatorClient(url: string): FolieClient {
+  const token = process.env.FOLIE_OPERATOR_TOKEN ?? operatorTokenFromEnvOrFile();
+  if (!token) throw new Error("FOLIE_OPERATOR_TOKEN is required for CLI/TUI. Set it to the operator credential (see `folie up`).");
+  return new FolieClient(url, fetch, token);
+}
+
 const viaServer =
   (cmd: (api: Api, args: string[], out: (l: string) => void) => Promise<number>): Command =>
-  (args) => withServerUrl((url) => cmd(new FolieClient(url), args, console.log));
+  (args) => withServerUrl((url) => cmd(operatorClient(url), args, console.log));
 
 const commands: Record<string, Command> = {
   up,
@@ -28,7 +34,7 @@ const [name, ...args] = process.argv.slice(2);
 const tui: Command = () =>
   withServerUrl(async (url) => {
     const { runTui } = await import("./tui/run"); // lazy: only the TUI needs the native renderer
-    await runTui(new FolieClient(url));
+    await runTui(operatorClient(url));
   });
 
 const command = name === undefined ? tui : commands[name];

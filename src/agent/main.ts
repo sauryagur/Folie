@@ -11,7 +11,9 @@ const env = process.env;
 const name = env.FOLIE_AGENT;
 if (!name) throw new Error("FOLIE_AGENT is required");
 const serverUrl = env.FOLIE_SERVER_URL ?? "http://folie-server.folie.svc:8080";
-const server = new FolieClient(serverUrl);
+const agentToken = env.FOLIE_AGENT_TOKEN;
+if (!agentToken) throw new Error("FOLIE_AGENT_TOKEN is required: agent executions must authenticate");
+const server = new FolieClient(serverUrl, fetch, agentToken);
 const telemetry = createTelemetry({ serviceName: "folie-agent", otlpEndpoint: `${serverUrl}/v1/otlp`, exportMetrics: false });
 
 const runtime = await createRuntime(

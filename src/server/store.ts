@@ -51,6 +51,12 @@ export interface WakeDemand extends StoredTrace {
 export interface AgentRepo {
   /** Creates the agent if missing and records activity now (mail in, report out). */
   touch(name: string): Promise<void>;
+  /** Explicit operator registration: creates the agent row (or returns the existing one). */
+  register(name: string): Promise<AgentInfo>;
+  /** Returns the agent row or null. */
+  get(name: string): Promise<AgentInfo | null>;
+  /** Returns the agent row or null. */
+  find(name: string): Promise<AgentInfo | null>;
   list(): Promise<AgentInfo[]>;
   /** Agents with at least one unacked message: the wake demand, in name order. */
   wakeDemand(): Promise<WakeDemand[]>;
@@ -59,6 +65,40 @@ export interface AgentRepo {
   /** Names in `state` with no unread mail and no activity for at least `seconds`. */
   idle(state: string, seconds: number): Promise<string[]>;
   setState(name: string, state: string): Promise<void>;
+  bumpCredentialGeneration(name: string): Promise<void>;
+}
+
+// --- Auth ports ---
+
+export interface AuthPrincipal {
+  kind: "agent" | "operator";
+  /** For agents: the agent name. For operators: "operator". */
+  name: string;
+  /** Agent credential generation the token is bound to, if any. */
+  generation?: number;
+  /** Execution id this token is bound to, if any. */
+  executionId?: string;
+}
+
+export interface AuthRepo {
+  /** Hashes and stores a new bearer token; returns the opaque token to give to the caller/execution. */
+  mintAgentToken(agent: string, executionId: string, generation: number): Promise<string>;
+  /** Set the operator token (hash only). */
+  setOperatorToken(token: string): Promise<void>;
+  /** Find a token by hash; returns the token row fields or null. */
+  findByHash(hash: string): Promise<{ principal: string; kind: "agent" | "operator"; agentName: string | null; executionId: string | null; generation: number; revokedAt: string | null } | null>;
+  /** Revoke all agent tokens for an agent (revocation bumps generation, caller decides). */
+  revokeAgentTokens(agent: string): Promise<void>;
+  /** Revoke a single token by hash. */
+  revokeByHash(hash: string): Promise<void>;
+  /** Upsert the execution binding and generation. */
+  upsertExecution(agent: string, executionId: string, generation: number, state?: string): Promise<void>;
+  /** Mark an execution terminated/lost/etc. */
+  setExecutionState(executionId: string, state: string): Promise<void>;
+  /** Read an execution. */
+  getExecution(executionId: string): Promise<{ agentName: string; state: string; generation: number } | null>;
+  /** Read an agent's credential generation and status. */
+  getAgentCredential(agent: string): Promise<{ generation: number; status: string } | null>;
 }
 
 export interface ReportRepo {
@@ -96,6 +136,7 @@ export interface Repos {
   reports: ReportRepo;
   topics: TopicRepo;
   events: EventRepo;
+  auth: AuthRepo;
 }
 
 export interface Store extends Repos {

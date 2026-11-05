@@ -3,11 +3,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { SpanKind } from "@opentelemetry/api";
 import { contextFrom, headersOf, withSpan } from "../shared/trace";
 import type { AgentOp, EventQuery, InboxQuery } from "../shared/types";
-import { NotFoundError, ValidationError } from "./errors";
+import { ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from "./errors";
 import type { AgentOps } from "./ops";
 import { OTLP_SIGNAL_PATH, type OtlpGateway, type OtlpSignal } from "./otlp-gateway";
 import type { SwarmService } from "./service";
 import { noopObservability, type Observability } from "../shared/telemetry";
+import { constantTimeEqual, extractBearer, hashToken, type Principal } from "./auth";
+import type { Store } from "./store";
 
 const MAX_BODY = 1 << 20;
 const MAX_OTLP_BODY = 8 << 20;
@@ -54,42 +56,55 @@ function inboxQuery(p: URLSearchParams): InboxQuery {
   return w === null ? {} : { workItem: w === "none" ? "none" : intParam(p, "workItem") };
 }
 
-function routes(svc: SwarmService, ops: AgentOps): [method: string, path: RegExp, handler: Route][] {
+function routes(svc: SwarmService, ops: AgentOps, store: Store, operatorToken: string): [method: string, path: RegExp, handler: (m: RegExpMatchArray, req: IncomingMessage, principal: Principal) => Promise<unknown>][] {
   return [
-    ["POST", /^\/v1\/work-items$/, async (_, req) => svc.submitGoal(await jsonBody(req))],
-    ["GET", /^\/v1\/work-items\/(\d+)$/, (m) => svc.workItem(Number(m[1]))],
-    ["POST", /^\/v1\/messages$/, async (_, req) => svc.send(await jsonBody(req))],
-    ["GET", /^\/v1\/agents$/, () => svc.listAgents()],
-    ["GET", /^\/v1\/messages$/, (_, req) => {
-      const p = queryParams(req);
-      return svc.messages({ after: intParam(p, "after"), limit: intParam(p, "limit"), topic: p.get("topic") ?? undefined, agent: p.get("agent") ?? undefined });
+    ["POST", /^\/v1\/work-items$/, async (_, req, p) => svc.submitGoal(await jsonBody(req), p)],
+    ["GET", /^\/v1\/work-items\/(\d+)$/, (m, _, p) => svc.workItem(Number(m[1]), p)],
+    ["POST", /^\/v1\/messages$/, async (_, req, p) => svc.send(await jsonBody(req), p)],
+    ["GET", /^\/v1\/agents$/, (_, __, p) => svc.listAgentsFor(p)],
+    ["POST", /^\/v1\/agents$/, async (_, req, p) => {
+      // Operator registration path.
+      if (p.kind !== "operator") throw new ForbiddenError("operator required");
+      const body: any = await jsonBody(req);
+      const name = typeof body?.name === "string" ? body.name : body?.agent;
+      if (!name) throw new ValidationError("name: required");
+      const info = await svc.registerAgent(name);
+      return { name: info.name, state: info.state };
     }],
-    ["GET", /^\/v1\/reports$/, (_, req) => {
-      const p = queryParams(req);
-      return svc.reports({ agent: p.get("agent") ?? undefined, limit: intParam(p, "limit") });
+    ["GET", /^\/v1\/messages$/, (_, req, p) => {
+      const q = queryParams(req);
+      return svc.messages({ after: intParam(q, "after"), limit: intParam(q, "limit"), topic: q.get("topic") ?? undefined, agent: q.get("agent") ?? undefined }, p);
     }],
-    ["POST", /^\/v1\/agents\/([^/]+)\/(suspend|resume|delete)$/, (m) => ops.run(m[2] as AgentOp, decodeURIComponent(m[1]!))],
-    ["GET", /^\/v1\/agents\/([^/]+)\/inbox$/, (m, req) => svc.inbox(decodeURIComponent(m[1]!), inboxQuery(queryParams(req)))],
-    ["POST", /^\/v1\/reports$/, async (_, req) => svc.submitReport(await jsonBody(req))],
-    ["GET", /^\/v1\/topics$/, () => svc.listTopics()],
-    ["POST", /^\/v1\/topics\/([^/]+)\/subscribe$/, async (m, req) => svc.subscribe(decodeURIComponent(m[1]!), await jsonBody(req))],
-    ["POST", /^\/v1\/topics\/([^/]+)\/unsubscribe$/, async (m, req) => svc.unsubscribe(decodeURIComponent(m[1]!), await jsonBody(req))],
-    ["POST", /^\/v1\/topics\/([^/]+)\/publish$/, async (m, req) => svc.publish(decodeURIComponent(m[1]!), await jsonBody(req))],
-    ["POST", /^\/v1\/sessions\/events$/, async (_, req) => svc.ingestEvents(await jsonBody(req))],
-    ["GET", /^\/v1\/sessions\/events$/, (_, req) => {
-      const p = queryParams(req);
+    ["GET", /^\/v1\/reports$/, (_, req, p) => {
+      const q = queryParams(req);
+      return svc.reports({ agent: q.get("agent") ?? undefined, limit: intParam(q, "limit") }, p);
+    }],
+    ["POST", /^\/v1\/agents\/([^/]+)\/(suspend|resume|delete)$/, (m, _, p) => {
+      if (p.kind !== "operator") throw new ForbiddenError("operator required");
+      // Unknown agent must 404 (checked inside controller getTask, but also ensure existence for delete? Old behaviour: delete of unknown still retires. Keep that.
+      return ops.run(m[2] as AgentOp, decodeURIComponent(m[1]!));
+    }],
+    ["GET", /^\/v1\/agents\/([^/]+)\/inbox$/, (m, req, p) => svc.inbox(decodeURIComponent(m[1]!), inboxQuery(queryParams(req)), p)],
+    ["POST", /^\/v1\/reports$/, async (_, req, p) => svc.submitReport(await jsonBody(req), p)],
+    ["GET", /^\/v1\/topics$/, (_, __, p) => svc.listTopicsFor(p)],
+    ["POST", /^\/v1\/topics\/([^/]+)\/subscribe$/, async (m, req, p) => svc.subscribe(decodeURIComponent(m[1]!), await jsonBody(req), p)],
+    ["POST", /^\/v1\/topics\/([^/]+)\/unsubscribe$/, async (m, req, p) => svc.unsubscribe(decodeURIComponent(m[1]!), await jsonBody(req), p)],
+    ["POST", /^\/v1\/topics\/([^/]+)\/publish$/, async (m, req, p) => svc.publish(decodeURIComponent(m[1]!), await jsonBody(req), p)],
+    ["POST", /^\/v1\/sessions\/events$/, async (_, req, p) => svc.ingestEvents(await jsonBody(req), p)],
+    ["GET", /^\/v1\/sessions\/events$/, (_, req, p) => {
+      const q = queryParams(req);
       return svc.events({
-        agent: p.get("agent") ?? undefined,
-        sessionId: p.get("sessionId") ?? undefined,
-        scope: p.get("scope") ?? undefined,
-        type: (p.get("type") ?? undefined) as EventQuery["type"],
-        after: intParam(p, "after"),
-        limit: intParam(p, "limit"),
-      });
+        agent: q.get("agent") ?? undefined,
+        sessionId: q.get("sessionId") ?? undefined,
+        scope: q.get("scope") ?? undefined,
+        type: (q.get("type") ?? undefined) as EventQuery["type"],
+        after: intParam(q, "after"),
+        limit: intParam(q, "limit"),
+      }, p);
     }],
-    ["GET", /^\/v1\/sessions\/attempts$/, (_, req) => {
-      const p = queryParams(req);
-      return svc.attempts(p.get("agent") ?? "", p.get("scope") ?? "", p.get("exclude") ?? undefined);
+    ["GET", /^\/v1\/sessions\/attempts$/, (_, req, p) => {
+      const q = queryParams(req);
+      return svc.attempts(q.get("agent") ?? "", q.get("scope") ?? "", q.get("exclude") ?? undefined, p);
     }],
   ];
 }
@@ -101,13 +116,50 @@ function reply(req: IncomingMessage, res: ServerResponse, status: number, body: 
   res.writeHead(status, headers).end(JSON.stringify(body));
 }
 
-export function httpServer(svc: SwarmService, ops: AgentOps, gateway: OtlpGateway, obs: Observability = noopObservability()): Server {
-  const table = routes(svc, ops);
+/** Resolve Authorization: Bearer … into a Principal, fail-closed. Reads from the store (hash only). */
+async function resolvePrincipal(req: IncomingMessage, store: Store, operatorToken: string, operatorHash: string): Promise<Principal> {
+  const token = extractBearer(req.headers.authorization);
+  const hash = hashToken(token);
+  const row = await store.auth.findByHash(hash);
+  if (!row || row.revokedAt) throw new UnauthorizedError("unknown token");
+  if (row.kind === "operator") {
+    // Constant-time comparison against the configured operator secret (and the DB hash).
+    if (!constantTimeEqual(token, operatorToken)) throw new UnauthorizedError("unknown token");
+    return { kind: "operator", name: "operator" };
+  }
+  // Agent token.
+  if (!row.agentName || !row.executionId) throw new UnauthorizedError("unknown token");
+  const cred = await store.auth.getAgentCredential(row.agentName);
+  if (!cred || cred.status !== "active") throw new UnauthorizedError("token revoked");
+  if (cred.generation !== row.generation) throw new UnauthorizedError("token revoked");
+  const exec = await store.auth.getExecution(row.executionId);
+  if (!exec || exec.agentName !== row.agentName || exec.generation !== row.generation) throw new UnauthorizedError("token revoked");
+  if (!(exec.state === "running" || exec.state === "suspended")) throw new UnauthorizedError("token revoked");
+  return { kind: "agent", name: row.agentName, generation: row.generation, executionId: row.executionId };
+}
+
+export function httpServer(svc: SwarmService, ops: AgentOps, gateway: OtlpGateway, obs: Observability = noopObservability(), store?: Store, operatorToken?: string): Server {
+  if (!store || !operatorToken) {
+    throw new Error("httpServer requires store and operatorToken for authenticated API; /healthz is public but all API routes must be authenticated");
+  }
+  const operatorHash = hashToken(operatorToken);
+  const table = routes(svc, ops, store, operatorToken);
   return createServer(async (req, res) => {
     const path = new URL(req.url ?? "/", "http://x").pathname;
     if (path === "/healthz") return void res.writeHead(200).end("ok");
     try {
-      // Telemetry pass-through for sandboxed agents; deliberately outside the request span (it would trace itself).
+      const matched = table.filter(([, re]) => re.test(path));
+      const isOtlp = !!OTLP_SIGNAL_PATH[path];
+      if (matched.length === 0 && !isOtlp) throw new NotFoundError(path);
+
+      // Authenticate everything else, including OTLP. Principal from Authorization: Bearer only.
+      const principal = await resolvePrincipal(req, store, operatorToken, operatorHash).catch((e) => {
+        // Normalize auth failures: distinguish 401 vs 403? The store throws NotFoundError for unknown tokens = unauthenticated.
+        // HTTP maps that to 401 below.
+        throw e;
+      });
+
+      // OTLP: operator OR any valid agent token is allowed; body is forwarded verbatim (not traced).
       const signal = OTLP_SIGNAL_PATH[path];
       if (signal && req.method === "POST") {
         const body = await rawBody(req, MAX_OTLP_BODY);
@@ -118,8 +170,8 @@ export function httpServer(svc: SwarmService, ops: AgentOps, gateway: OtlpGatewa
         });
         return void res.writeHead(status, { "content-type": "application/json" }).end("{}");
       }
-      const matched = table.filter(([, re]) => re.test(path));
-      if (matched.length === 0) throw new NotFoundError(path);
+      if (isOtlp && req.method !== "POST") throw new NotFoundError(path);
+
       const route = matched.find(([method]) => method === req.method);
       if (!route) return reply(req, res, 405, { error: `${req.method} not allowed` });
       // The caller's traceparent makes this request span a child of the caller's span (an agent's tool call, the CLI).
@@ -127,12 +179,14 @@ export function httpServer(svc: SwarmService, ops: AgentOps, gateway: OtlpGatewa
         obs.tracer,
         "folie.http.request",
         { parent: contextFrom(headersOf(req.headers)), kind: SpanKind.SERVER, attributes: { "http.request.method": req.method, "url.path": path } },
-        () => route[2](path.match(route[1])!, req),
+        () => route[2](path.match(route[1])!, req, principal),
       );
       reply(req, res, 200, result);
     } catch (e) {
       if (e instanceof ValidationError) return reply(req, res, 400, { error: e.message });
       if (e instanceof NotFoundError) return reply(req, res, 404, { error: e.message });
+      if (e instanceof ForbiddenError) return reply(req, res, 403, { error: e.message });
+      if (e instanceof UnauthorizedError) return reply(req, res, 401, { error: e.message });
       console.error("folie-server:", e);
       reply(req, res, 500, { error: "internal error" });
     }

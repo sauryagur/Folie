@@ -10,7 +10,8 @@ import type {
   WorkItemState,
 } from "../shared/types";
 import type { Database, Queryable, Row } from "./db";
-import type { AgentRepo, EventRepo, MessageRepo, Repos, ReportRepo, Store, StoredTrace, TopicRepo, WorkItemRepo } from "./store";
+import type { AgentRepo, AuthRepo, EventRepo, MessageRepo, Repos, ReportRepo, Store, StoredTrace, TopicRepo, WorkItemRepo } from "./store";
+import { generateExecutionId, generateToken, hashToken } from "./auth";
 
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
 const NO_TRACE: StoredTrace = { traceparent: null, tracestate: null };
@@ -168,6 +169,33 @@ const workItems = (q: Queryable): WorkItemRepo => ({
 const agents = (q: Queryable): AgentRepo => ({
   async touch(name) {
     await q.query("INSERT INTO agents (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET last_active_at = now()", [name]);
+  },
+  async register(name) {
+    // Explicit operator registration: ensure the row exists. Do not implicitly create agents on send/subscribe.
+    await q.query(
+      "INSERT INTO agents (name, state) VALUES ($1, 'pending') ON CONFLICT (name) DO UPDATE SET last_active_at = now()",
+      [name],
+    );
+    const row = await this.get(name);
+    if (!row) throw new Error(`agent ${name} missing after register`);
+    return row;
+  },
+  async get(name) {
+    const { rows } = await q.query(
+      `SELECT a.name, a.state, a.wake_epoch, a.last_active_at, count(m.id)::int AS unread
+       FROM agents a LEFT JOIN messages m ON m.recipient = a.name AND m.acked_at IS NULL
+       WHERE a.name = $1 GROUP BY a.name`,
+      [name],
+    );
+    if (!rows[0]) return null;
+    const r = rows[0]!;
+    return { name: r.name as string, state: r.state as string, wakeEpoch: r.wake_epoch as number, unread: r.unread as number, lastActiveAt: iso(r.last_active_at) };
+  },
+  async find(name) {
+    return this.get(name);
+  },
+  async bumpCredentialGeneration(name) {
+    await q.query("UPDATE agents SET credential_generation = credential_generation + 1 WHERE name = $1", [name]);
   },
   async retrace(name, trace) {
     await q.query("UPDATE messages SET traceparent = $2, tracestate = $3 WHERE recipient = $1 AND acked_at IS NULL", [name, trace.traceparent, trace.tracestate]);
@@ -331,6 +359,78 @@ const events = (q: Queryable): EventRepo => ({
   },
 });
 
+const auth = (q: Queryable): AuthRepo => ({
+  async mintAgentToken(agent, executionId, generation) {
+    const token = generateToken();
+    const hash = hashToken(token);
+    await q.query(
+      "INSERT INTO api_tokens (principal, kind, token_hash, agent_name, execution_id, generation) VALUES ($1,'agent',$2,$3,$4,$5)",
+      [`agent:${agent}`, hash, agent, executionId, generation],
+    );
+    return token;
+  },
+  async setOperatorToken(token) {
+    const hash = hashToken(token);
+    // Upsert: keep one operator token (replace any existing).
+    await q.query(
+      `INSERT INTO api_tokens (principal, kind, token_hash, generation)
+       VALUES ('operator','operator',$1,1)
+       ON CONFLICT (token_hash) DO UPDATE SET revoked_at = NULL`,
+      [hash],
+    );
+    // Revoke other operator tokens.
+    await q.query("UPDATE api_tokens SET revoked_at = now() WHERE kind='operator' AND token_hash <> $1 AND revoked_at IS NULL", [hash]);
+  },
+  async findByHash(hash) {
+    const { rows } = await q.query(
+      "SELECT principal, kind, agent_name, execution_id, generation, revoked_at FROM api_tokens WHERE token_hash = $1",
+      [hash],
+    );
+    if (!rows[0]) return null;
+    const r = rows[0] as Row;
+    return {
+      principal: r.principal as string,
+      kind: r.kind as "agent" | "operator",
+      agentName: (r.agent_name as string | null) ?? null,
+      executionId: (r.execution_id as string | null) ?? null,
+      generation: r.generation as number,
+      revokedAt: (r.revoked_at ? iso(r.revoked_at) : null) as string | null,
+    };
+  },
+  async revokeAgentTokens(agent) {
+    await q.query("UPDATE api_tokens SET revoked_at = now() WHERE kind='agent' AND agent_name=$1 AND revoked_at IS NULL", [agent]);
+  },
+  async revokeByHash(hash) {
+    await q.query("UPDATE api_tokens SET revoked_at = now() WHERE token_hash=$1 AND revoked_at IS NULL", [hash]);
+  },
+  async upsertExecution(agent, executionId, generation, state = "running") {
+    await q.query(
+      `INSERT INTO executions (id, agent_name, generation, state) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (id) DO UPDATE SET agent_name=$2, generation=$3, state=$4`,
+      [executionId, agent, generation, state],
+    );
+  },
+  async setExecutionState(executionId, state) {
+    if (state === "terminated" || state === "lost" || state === "failed") {
+      await q.query("UPDATE executions SET state=$2, ended_at=now() WHERE id=$1", [executionId, state]);
+    } else {
+      await q.query("UPDATE executions SET state=$2 WHERE id=$1", [executionId, state]);
+    }
+  },
+  async getExecution(executionId) {
+    const { rows } = await q.query("SELECT agent_name, state, generation FROM executions WHERE id=$1", [executionId]);
+    if (!rows[0]) return null;
+    const r = rows[0] as Row;
+    return { agentName: r.agent_name as string, state: r.state as string, generation: r.generation as number };
+  },
+  async getAgentCredential(agent) {
+    const { rows } = await q.query("SELECT credential_generation, status FROM agents WHERE name=$1", [agent]);
+    if (!rows[0]) return null;
+    const r = rows[0] as Row;
+    return { generation: r.credential_generation as number, status: r.status as string };
+  },
+});
+
 const bind = (q: Queryable): Repos => ({
   messages: messages(q),
   workItems: workItems(q),
@@ -338,6 +438,7 @@ const bind = (q: Queryable): Repos => ({
   reports: reports(q),
   topics: topics(q),
   events: events(q),
+  auth: auth(q),
 });
 
 export function pgStore(db: Database): Store {

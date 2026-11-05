@@ -1,8 +1,9 @@
 // `folie up` / `folie down`: the whole laptop world (kind + Substrate + ax + Postgres + folie-server).
 // Substrate and ax are installed by ax's own hack/setup-e2e-kind.sh; Folie never patches ax.
 import { randomBytes } from "node:crypto";
+import { chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { AX_DIR, CLUSTER, CONTEXT, KUBECONFIG, NS, REPO, kubectl, must, run, BIN, capture } from "./env";
+import { AX_DIR, CLUSTER, CONTEXT, HOME, KUBECONFIG, NS, REPO, kubectl, must, run, BIN, capture } from "./env";
 import { buildImages } from "./images";
 import { renderManifest } from "./manifest";
 import { grantFolieServerSubstrateAccess } from "./substrate-authz";
@@ -10,6 +11,27 @@ import { ALL_TOOLS, ensureTool } from "./tools";
 
 /** Host env vars named FOLIE_AGENT_ENV_<NAME> become <NAME> inside every agent task (LLM key, FOLIE_RUNTIME, ...). */
 const AGENT_ENV_PREFIX = "FOLIE_AGENT_ENV_";
+
+async function ensureOperatorTokenSecret(): Promise<void> {
+  // Token is stored hashed server-side; the plaintext lives only in a k8s Secret and ~/.folie/operator-token (0600).
+  const file = join(HOME, "operator-token");
+  let token = process.env.FOLIE_OPERATOR_TOKEN;
+  const exists = await Bun.file(file).exists();
+  if (!exists) {
+    token = token ?? randomBytes(32).toString("base64url");
+    await mkdir(HOME, { recursive: true });
+    await Bun.write(file, token + "\n");
+    await chmod(file, 0o600);
+    console.log(`==> wrote operator token to ${file} (0600)`);
+  } else if (!token) {
+    token = (await Bun.file(file).text()).trim();
+  }
+  // Never replace an existing Secret if Postgres already initialized? For operator token we upsert; rotation is explicit.
+  const yaml = await capture(
+    kubectl("-n", NS, "create", "secret", "generic", "folie-operator-token", "--dry-run=client", "-o", "yaml", `--from-literal=token=${token}`),
+  );
+  await must(kubectl("apply", "-f", "-"), { stdin: yaml, quiet: true });
+}
 
 async function clusterExists() {
   const out = await capture(["kind", "get", "clusters"]);
@@ -69,6 +91,7 @@ export async function up() {
 
   await deployPostgres();
   await grantFolieServerSubstrateAccess();
+  await ensureOperatorTokenSecret();
   await deployServer();
   console.log(`==> up. try: folie submit "say hello"   (kubectl: ${join(BIN, "kubectl")} --kubeconfig ${KUBECONFIG} --context ${CONTEXT})`);
 }

@@ -75,6 +75,40 @@ CREATE TABLE IF NOT EXISTS session_events (
   UNIQUE (session_id, seq)
 );
 CREATE INDEX IF NOT EXISTS session_events_scope ON session_events (agent, scope, id);
+
+-- Authenticated principals: bearer tokens stored hashed, bound to an agent/execution generation or an operator.
+-- Only the SHA-256 hash is persisted. Operator keys are configured via FOLIE_OPERATOR_TOKEN and compared
+-- constant-time against the DB hash; agent tokens are minted per execution.
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id            serial PRIMARY KEY,
+  principal     text NOT NULL,
+  kind          text NOT NULL CHECK (kind IN ('agent','operator')),
+  token_hash    text NOT NULL UNIQUE,
+  agent_name    text,
+  execution_id  text,
+  generation    int  NOT NULL DEFAULT 1,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  revoked_at    timestamptz
+);
+CREATE INDEX IF NOT EXISTS api_tokens_agent ON api_tokens (agent_name) WHERE kind = 'agent';
+
+-- Execution binding for agent tokens. A token is valid only while its execution row is 'running' or 'suspended'
+-- and generations match the agent's credential generation. The controller owns these rows (no table yet in
+-- the target Execution model in this slice: this is the minimal per-execution binding).
+CREATE TABLE IF NOT EXISTS executions (
+  id            text PRIMARY KEY,
+  agent_name    text NOT NULL REFERENCES agents(name),
+  state         text NOT NULL DEFAULT 'running' CHECK (state IN ('running','suspended','terminated','failed','lost')),
+  generation    int  NOT NULL DEFAULT 1,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  ended_at      timestamptz
+);
+CREATE INDEX IF NOT EXISTS executions_agent ON executions (agent_name, created_at DESC);
+
+-- Credential generations for agents: bumped on revocation/retire/delete/loss.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS credential_generation int NOT NULL DEFAULT 1;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+-- (agents.state remains the execution view for compatibility; status is 'active' | 'retired' for token checks)
 `;
 
 // Arbitrary constant: "folie" in ASCII. Old and new server pods overlap during a rollout and
