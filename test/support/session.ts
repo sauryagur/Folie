@@ -5,7 +5,11 @@ import type { Session } from "../../src/agent/runtime";
 import type { StructuredLogger } from "../../src/shared/logger";
 import type { Message, SessionEventInput } from "../../src/shared/types";
 
-const noopLog: StructuredLogger = { log() {}, error() {}, child: () => noopLog };
+const noopLog: StructuredLogger = {
+  log() {},
+  error() {},
+  child: () => noopLog,
+};
 
 export interface FakeSessionOptions {
   id?: string;
@@ -17,7 +21,10 @@ export interface FakeSessionOptions {
 
 export function fakeSession(o: FakeSessionOptions = {}) {
   const delivered: SessionEventInput[] = [];
-  const events = new EventSink(async (e) => void delivered.push(...e), () => {});
+  const events = new EventSink(
+    async (e) => void delivered.push(...e),
+    () => {},
+  );
   const queue = [...(o.mail ?? [])];
   const session: Session = {
     id: o.id ?? "s1",

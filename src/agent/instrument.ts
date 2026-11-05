@@ -13,14 +13,24 @@ export interface ToolStats {
 
 /** pi's bash tool reports an exit code in its result details; other tools have none. */
 const exitCodeOf = (details: unknown): number | undefined =>
-  typeof details === "object" && details !== null && "exitCode" in details && typeof details.exitCode === "number" ? details.exitCode : undefined;
+  typeof details === "object" &&
+  details !== null &&
+  "exitCode" in details &&
+  typeof details.exitCode === "number"
+    ? details.exitCode
+    : undefined;
 
 /**
  * `parent` is read per call: tool spans hang under the turn that requested them.
  * A side-effecting (non-replayable) call is flushed to the server BEFORE it runs, and again after: if the process
  * dies in between, the log shows a start with no end, which is how a restarted session knows the call is of unknown outcome.
  */
-export function instrument(tool: AgentTool, session: Session, parent: () => Context, stats: ToolStats): AgentTool {
+export function instrument(
+  tool: AgentTool,
+  session: Session,
+  parent: () => Context,
+  stats: ToolStats,
+): AgentTool {
   const replayable = replayPolicy(tool) === "safe";
   return {
     ...tool,
@@ -29,7 +39,14 @@ export function instrument(tool: AgentTool, session: Session, parent: () => Cont
       withSpan(
         session.tracer,
         `folie.tool.${tool.name}`,
-        { parent: parent(), attributes: { "tool.name": tool.name, "tool.replayable": replayable, "tool.call_id": callId } },
+        {
+          parent: parent(),
+          attributes: {
+            "tool.name": tool.name,
+            "tool.replayable": replayable,
+            "tool.call_id": callId,
+          },
+        },
         async (span) => {
           const startedAt = performance.now();
           const base = { callId, tool: tool.name, replayable };
@@ -40,12 +57,22 @@ export function instrument(tool: AgentTool, session: Session, parent: () => Cont
             const result = await tool.execute(callId, params, signal, onUpdate);
             const exitCode = exitCodeOf(result.details) ?? 0;
             span.setAttribute("tool.exit_code", exitCode);
-            session.events.emit("tool_end", { ...base, isError: false, exitCode, durationMs: Math.round(performance.now() - startedAt) });
+            session.events.emit("tool_end", {
+              ...base,
+              isError: false,
+              exitCode,
+              durationMs: Math.round(performance.now() - startedAt),
+            });
             return result;
           } catch (e) {
             stats.toolFailures++;
             failSpan(span, e);
-            span.setAttribute("tool.exit_code", (e instanceof Error && "details" in e ? exitCodeOf(e.details) : undefined) ?? 1);
+            span.setAttribute(
+              "tool.exit_code",
+              (e instanceof Error && "details" in e
+                ? exitCodeOf(e.details)
+                : undefined) ?? 1,
+            );
             session.events.emit("tool_end", {
               ...base,
               isError: true,

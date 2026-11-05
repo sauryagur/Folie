@@ -12,7 +12,9 @@ beforeEach(async () => void ({ ax } = await cluster.reset()));
 afterAll(() => cluster.close());
 
 it("a submitted goal waits in the queue, then wakes a pool agent that works it and reports", async () => {
-  const { workItem, message } = await client.submitGoal({ goal: "implement the PRD" });
+  const { workItem, message } = await client.submitGoal({
+    goal: "implement the PRD",
+  });
   expect(message).toBeNull();
   expect(ax.tasks.size).toBe(0);
 
@@ -23,8 +25,17 @@ it("a submitted goal waits in the queue, then wakes a pool agent that works it a
 
   const view = await client.workItem(workItem.id);
   expect(view.workItem.state).toBe("done");
-  expect(view.report).toMatchObject({ agent: "agent-1", outcome: "done", summary: "echo: [human] implement the PRD" });
-  expect((await client.agents())[0]).toMatchObject({ name: "agent-1", state: "running", wakeEpoch: 1, unread: 0 });
+  expect(view.report).toMatchObject({
+    agent: "agent-1",
+    outcome: "done",
+    summary: "echo: [human] implement the PRD",
+  });
+  expect((await client.agents())[0]).toMatchObject({
+    name: "agent-1",
+    state: "running",
+    wakeEpoch: 1,
+    unread: 0,
+  });
 
   // Mail drained: nothing left to wake.
   ax.calls.length = 0;
@@ -34,27 +45,43 @@ it("a submitted goal waits in the queue, then wakes a pool agent that works it a
 
 it("the pool grows to its ceiling under load, queues the overflow, and drains it as agents free up", async () => {
   const ids = [];
-  for (const goal of ["one", "two", "three"]) ids.push((await client.submitGoal({ goal })).workItem.id);
+  for (const goal of ["one", "two", "three"])
+    ids.push((await client.submitGoal({ goal })).workItem.id);
 
   await tick();
-  expect([...ax.tasks.keys()].sort()).toEqual(["folie/agent-1", "folie/agent-2"]);
+  expect([...ax.tasks.keys()].sort()).toEqual([
+    "folie/agent-1",
+    "folie/agent-2",
+  ]);
   expect((await client.workItem(ids[2]!)).workItem.state).toBe("queued");
 
   await runAgents(() => echoRuntime);
   await tick();
   await runAgents(() => echoRuntime);
 
-  for (const id of ids) expect((await client.workItem(id)).workItem.state).toBe("done");
-  expect([...ax.tasks.keys()].sort()).toEqual(["folie/agent-1", "folie/agent-2"]);
+  for (const id of ids)
+    expect((await client.workItem(id)).workItem.state).toBe("done");
+  expect([...ax.tasks.keys()].sort()).toEqual([
+    "folie/agent-1",
+    "folie/agent-2",
+  ]);
 });
 
 it("emergence: an agent delegating by message wakes a peer that did not exist", async () => {
-  await client.registerAgent("lead"); await client.registerAgent("worker");
-  const { workItem } = await client.submitGoal({ goal: "split this up", to: "lead" });
+  await client.registerAgent("lead");
+  await client.registerAgent("worker");
+  const { workItem } = await client.submitGoal({
+    goal: "split this up",
+    to: "lead",
+  });
   const delegating: Runtime = {
     run: async () => {
       const ac = await cluster.agentClientFor("lead");
-      await ac.send({ from: "lead", to: "worker", body: "take the second half" });
+      await ac.send({
+        from: "lead",
+        to: "worker",
+        body: "take the second half",
+      });
       return { outcome: "done", summary: "delegated" };
     },
   };
@@ -72,14 +99,20 @@ it("emergence: an agent delegating by message wakes a peer that did not exist", 
 });
 
 it("a topic publish wakes subscribers that have never run, and reaches them again after they are suspended", async () => {
-  await client.registerAgent("watch-1"); await client.registerAgent("watch-2");
+  await client.registerAgent("watch-1");
+  await client.registerAgent("watch-2");
   await client.subscribe("alerts", { agent: "watch-1" });
   await client.subscribe("alerts", { agent: "watch-2" });
   expect(ax.tasks.size).toBe(0); // subscribing alone wakes nobody
 
-  expect(await client.publish("alerts", { from: "human", body: "disk full" })).toEqual({ delivered: 2 });
+  expect(
+    await client.publish("alerts", { from: "human", body: "disk full" }),
+  ).toEqual({ delivered: 2 });
   await tick();
-  expect([...ax.tasks.keys()].sort()).toEqual(["folie/watch-1", "folie/watch-2"]);
+  expect([...ax.tasks.keys()].sort()).toEqual([
+    "folie/watch-1",
+    "folie/watch-2",
+  ]);
   await runAgents(() => echoRuntime);
   expect(await client.inbox("watch-1")).toEqual([]);
   expect(await client.inbox("watch-2")).toEqual([]);
@@ -93,11 +126,14 @@ it("a topic publish wakes subscribers that have never run, and reaches them agai
   await tick();
   expect(ax.tasks.get("folie/watch-1")).toBe(task);
   expect(ax.tasks.get("folie/watch-1")!.phase).toBe("Running");
-  expect(await client.inbox("watch-1")).toMatchObject([{ topic: "alerts", body: "disk still full" }]);
+  expect(await client.inbox("watch-1")).toMatchObject([
+    { topic: "alerts", body: "disk still full" },
+  ]);
 });
 
 it("an agent publishing from a session wakes the other subscribers, not itself", async () => {
-  await client.registerAgent("lead"); await client.registerAgent("worker");
+  await client.registerAgent("lead");
+  await client.registerAgent("worker");
   await client.subscribe("alerts", { agent: "lead" });
   await client.subscribe("alerts", { agent: "worker" });
   await client.submitGoal({ goal: "announce", to: "lead" });
@@ -115,14 +151,18 @@ it("an agent publishing from a session wakes the other subscribers, not itself",
 
   await tick();
   expect([...ax.tasks.keys()].sort()).toEqual(["folie/lead", "folie/worker"]);
-  expect(await client.inbox("worker")).toMatchObject([{ from: "lead", topic: "alerts", body: "heads up" }]);
+  expect(await client.inbox("worker")).toMatchObject([
+    { from: "lead", topic: "alerts", body: "heads up" },
+  ]);
 });
 
 it("a failing session parks the work item as blocked and is not retried", async () => {
   const { workItem } = await client.submitGoal({ goal: "impossible" });
   await tick();
   let runs = 0;
-  const failing: Runtime = { run: async () => (runs++, Promise.reject(new Error("tests do not pass"))) };
+  const failing: Runtime = {
+    run: async () => (runs++, Promise.reject(new Error("tests do not pass"))),
+  };
 
   await runAgents(() => failing);
   await runAgents(() => failing);
@@ -130,7 +170,10 @@ it("a failing session parks the work item as blocked and is not retried", async 
   expect(runs).toBe(1);
   const view = await client.workItem(workItem.id);
   expect(view.workItem.state).toBe("blocked");
-  expect(view.report).toMatchObject({ outcome: "failed", summary: "tests do not pass" });
+  expect(view.report).toMatchObject({
+    outcome: "failed",
+    summary: "tests do not pass",
+  });
 });
 
 it("lifecycle: quiet agents are suspended, resumed by new mail with the same task, and retired after long quiet", async () => {
@@ -180,7 +223,10 @@ it("operator steering over HTTP: suspend, resume and the delete kill switch", as
   await tick();
   await runAgents(() => echoRuntime);
 
-  expect(await client.agentOp("suspend", "a")).toEqual({ agent: "a", state: "suspended" });
+  expect(await client.agentOp("suspend", "a")).toEqual({
+    agent: "a",
+    state: "suspended",
+  });
   expect(ax.tasks.get("folie/a")!.phase).toBe("Suspended");
   await tick(); // nothing wakes it: no mail
   expect(ax.tasks.get("folie/a")!.phase).toBe("Suspended");
@@ -192,7 +238,10 @@ it("operator steering over HTTP: suspend, resume and the delete kill switch", as
   expect(ax.tasks.get("folie/a")!.phase).toBe("Running");
   expect((await client.agents())[0]).toMatchObject({ state: "running" });
 
-  expect(await client.agentOp("delete", "a")).toEqual({ agent: "a", state: "retired" });
+  expect(await client.agentOp("delete", "a")).toEqual({
+    agent: "a",
+    state: "retired",
+  });
   expect(ax.tasks.has("folie/a")).toBe(false);
 
   // Mail to a deleted agent starts a fresh task: deletion is retirement, not a ban.
@@ -200,5 +249,7 @@ it("operator steering over HTTP: suspend, resume and the delete kill switch", as
   await tick();
   expect(ax.tasks.get("folie/a")!.phase).toBe("Running");
 
-  await expect(client.agentOp("suspend", "never-existed")).rejects.toThrow(/404/);
+  await expect(client.agentOp("suspend", "never-existed")).rejects.toThrow(
+    /404/,
+  );
 });

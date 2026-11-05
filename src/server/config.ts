@@ -45,33 +45,60 @@ function required(env: NodeJS.ProcessEnv, key: string): string {
   return v;
 }
 
-function ports(env: NodeJS.ProcessEnv, key: string, fallback: number[]): number[] {
+function ports(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  fallback: number[],
+): number[] {
   const raw = env[key];
   if (raw === undefined) return fallback;
   const list = raw.split(",").map((s) => Number(s.trim()));
-  if (list.length === 0 || !list.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535)) {
-    throw new Error(`${key} must be a comma-separated list of ports, got ${JSON.stringify(raw)}`);
+  if (
+    list.length === 0 ||
+    !list.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535)
+  ) {
+    throw new Error(
+      `${key} must be a comma-separated list of ports, got ${JSON.stringify(raw)}`,
+    );
   }
   return list;
 }
 
-function positiveInt(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
+function positiveInt(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  fallback: number,
+): number {
   const raw = env[key];
   if (raw === undefined) return fallback;
   const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1) throw new Error(`${key} must be a positive integer, got ${JSON.stringify(raw)}`);
+  if (!Number.isInteger(n) || n < 1)
+    throw new Error(
+      `${key} must be a positive integer, got ${JSON.stringify(raw)}`,
+    );
   return n;
 }
 
 /** FOLIE_AGENT_RESOURCES="<k=v>,..." → `{ cpu: "250m", memory: "512Mi" }` at the provider. Default when unset (R-6.11). */
-export function parseResources(raw?: string): { cpu?: string; memory?: string } | undefined {
+export function parseResources(
+  raw?: string,
+): { cpu?: string; memory?: string } | undefined {
   if (!raw) return { cpu: "500m", memory: "512Mi" };
-  const entries = raw.split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
-    const i = s.indexOf("=");
-    if (i <= 0 || !["cpu", "memory"].includes(s.slice(0, i))) throw new Error(`FOLIE_AGENT_RESOURCES entry must be cpu= or memory=, got ${JSON.stringify(s)}`);
-    return [s.slice(0, i), s.slice(i + 1)] as [string, string];
-  });
-  return entries.length > 0 ? Object.fromEntries(entries) : { cpu: "500m", memory: "512Mi" };
+  const entries = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      const i = s.indexOf("=");
+      if (i <= 0 || !["cpu", "memory"].includes(s.slice(0, i)))
+        throw new Error(
+          `FOLIE_AGENT_RESOURCES entry must be cpu= or memory=, got ${JSON.stringify(s)}`,
+        );
+      return [s.slice(0, i), s.slice(i + 1)] as [string, string];
+    });
+  return entries.length > 0
+    ? Object.fromEntries(entries)
+    : { cpu: "500m", memory: "512Mi" };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
@@ -82,7 +109,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
   );
   const suspendAfterSec = positiveInt(env, "FOLIE_SUSPEND_AFTER_S", 60);
   const deleteAfterSec = positiveInt(env, "FOLIE_DELETE_AFTER_S", 3600);
-  if (deleteAfterSec <= suspendAfterSec) throw new Error("FOLIE_DELETE_AFTER_S must exceed FOLIE_SUSPEND_AFTER_S");
+  if (deleteAfterSec <= suspendAfterSec)
+    throw new Error("FOLIE_DELETE_AFTER_S must exceed FOLIE_SUSPEND_AFTER_S");
   const operatorToken = required(env, "FOLIE_OPERATOR_TOKEN");
   return {
     port: Number(env.PORT ?? 8080),
@@ -95,10 +123,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
     controller: {
       namespace: env.FOLIE_ATESPACE ?? "folie",
       image: required(env, "FOLIE_AGENT_IMAGE"),
-      command: JSON.parse(env.FOLIE_AGENT_COMMAND ?? '["/usr/local/bin/folie-agent"]'),
+      command: JSON.parse(
+        env.FOLIE_AGENT_COMMAND ?? '["/usr/local/bin/folie-agent"]',
+      ),
       resources: parseResources(env.FOLIE_AGENT_RESOURCES),
       env: {
-        FOLIE_SERVER_URL: env.FOLIE_AGENT_SERVER_URL ?? "http://folie-server.folie.svc:8080",
+        FOLIE_SERVER_URL:
+          env.FOLIE_AGENT_SERVER_URL ?? "http://folie-server.folie.svc:8080",
         ...forwarded,
       },
       suspendAfterSec,

@@ -12,19 +12,32 @@ afterAll(() => db.close());
 
 /** Pretends an agent has been quiet for `seconds`. */
 const age = (name: string, seconds: number) =>
-  db.query("UPDATE agents SET last_active_at = now() - make_interval(secs => $2) WHERE name = $1", [name, seconds]);
+  db.query(
+    "UPDATE agents SET last_active_at = now() - make_interval(secs => $2) WHERE name = $1",
+    [name, seconds],
+  );
 
 describe("messages", () => {
   it("returns unacked messages oldest first, per recipient", async () => {
     await store.agents.touch("a");
     await store.agents.touch("b");
-    const m1 = await store.messages.send({ from: "human", to: "a", body: "one" });
+    const m1 = await store.messages.send({
+      from: "human",
+      to: "a",
+      body: "one",
+    });
     await store.messages.send({ from: "human", to: "b", body: "other" });
     const m3 = await store.messages.send({ from: "x", to: "a", body: "two" });
 
     const inbox = await store.messages.unacked("a");
     expect(inbox.map((m) => m.id)).toEqual([m1.id, m3.id]);
-    expect(inbox[0]).toMatchObject({ from: "human", to: "a", body: "one", workItemId: null, ackedAt: null });
+    expect(inbox[0]).toMatchObject({
+      from: "human",
+      to: "a",
+      body: "one",
+      workItemId: null,
+      ackedAt: null,
+    });
   });
 
   it("acks only the requested unacked messages of that recipient", async () => {
@@ -42,7 +55,9 @@ describe("messages", () => {
   });
 
   it("rejects messages to agents that do not exist", async () => {
-    await expect(store.messages.send({ from: "h", to: "ghost", body: "x" })).rejects.toThrow();
+    await expect(
+      store.messages.send({ from: "h", to: "ghost", body: "x" }),
+    ).rejects.toThrow();
   });
 });
 
@@ -55,8 +70,20 @@ describe("agents", () => {
     await store.messages.send({ from: "h", to: "a", body: "2" });
 
     expect(await store.agents.list()).toEqual([
-      { name: "a", state: "pending", wakeEpoch: 0, unread: 2, lastActiveAt: expect.any(String) },
-      { name: "b", state: "pending", wakeEpoch: 0, unread: 0, lastActiveAt: expect.any(String) },
+      {
+        name: "a",
+        state: "pending",
+        wakeEpoch: 0,
+        unread: 2,
+        lastActiveAt: expect.any(String),
+      },
+      {
+        name: "b",
+        state: "pending",
+        wakeEpoch: 0,
+        unread: 0,
+        lastActiveAt: expect.any(String),
+      },
     ]);
   });
 
@@ -74,17 +101,25 @@ describe("agents", () => {
     await store.agents.touch("a");
     await store.agents.setState("a", "running");
     await store.agents.setState("a", "running");
-    expect((await store.agents.list())[0]).toMatchObject({ state: "running", wakeEpoch: 1 });
+    expect((await store.agents.list())[0]).toMatchObject({
+      state: "running",
+      wakeEpoch: 1,
+    });
     await store.agents.setState("a", "suspended");
     await store.agents.setState("a", "running");
-    expect((await store.agents.list())[0]).toMatchObject({ state: "running", wakeEpoch: 2 });
+    expect((await store.agents.list())[0]).toMatchObject({
+      state: "running",
+      wakeEpoch: 2,
+    });
   });
 });
 
 describe("idle", () => {
   it("lists agents in the state that have been quiet long enough, and only those", async () => {
-    for (const n of ["quiet", "fresh", "other-state"]) await store.agents.touch(n);
-    for (const n of ["quiet", "fresh"]) await store.agents.setState(n, "running");
+    for (const n of ["quiet", "fresh", "other-state"])
+      await store.agents.touch(n);
+    for (const n of ["quiet", "fresh"])
+      await store.agents.setState(n, "running");
     await store.agents.setState("other-state", "suspended");
     await age("quiet", 120);
     await age("other-state", 120);
@@ -135,14 +170,37 @@ describe("reports", () => {
   it("links the latest report to a work item through the messages its session consumed", async () => {
     await store.agents.touch("a");
     const item = await store.workItems.create("goal", "assigned");
-    const m = await store.messages.send({ from: "human", to: "a", body: "goal", workItemId: item.id });
+    const m = await store.messages.send({
+      from: "human",
+      to: "a",
+      body: "goal",
+      workItemId: item.id,
+    });
     expect(await store.workItems.latestReport(item.id)).toBeNull();
 
-    const first = await store.reports.record({ agent: "a", startedAt: new Date().toISOString(), outcome: "failed", summary: "no", messageIds: [m.id] });
-    const second = await store.reports.record({ agent: "a", startedAt: new Date().toISOString(), outcome: "done", summary: "yes", messageIds: [m.id] });
+    const first = await store.reports.record({
+      agent: "a",
+      startedAt: new Date().toISOString(),
+      outcome: "failed",
+      summary: "no",
+      messageIds: [m.id],
+    });
+    const second = await store.reports.record({
+      agent: "a",
+      startedAt: new Date().toISOString(),
+      outcome: "done",
+      summary: "yes",
+      messageIds: [m.id],
+    });
 
     const latest = await store.workItems.latestReport(item.id);
-    expect(latest).toMatchObject({ id: second.id, agent: "a", outcome: "done", summary: "yes", messageIds: [m.id] });
+    expect(latest).toMatchObject({
+      id: second.id,
+      agent: "a",
+      outcome: "done",
+      summary: "yes",
+      messageIds: [m.id],
+    });
     expect(latest!.id).not.toBe(first.id);
   });
 
@@ -150,9 +208,25 @@ describe("reports", () => {
     await store.agents.touch("a");
     const one = await store.workItems.create("one", "assigned");
     const two = await store.workItems.create("two", "assigned");
-    const m1 = await store.messages.send({ from: "h", to: "a", body: "1", workItemId: one.id });
-    await store.messages.send({ from: "h", to: "a", body: "2", workItemId: two.id });
-    await store.reports.record({ agent: "a", startedAt: new Date().toISOString(), outcome: "done", summary: "s", messageIds: [m1.id] });
+    const m1 = await store.messages.send({
+      from: "h",
+      to: "a",
+      body: "1",
+      workItemId: one.id,
+    });
+    await store.messages.send({
+      from: "h",
+      to: "a",
+      body: "2",
+      workItemId: two.id,
+    });
+    await store.reports.record({
+      agent: "a",
+      startedAt: new Date().toISOString(),
+      outcome: "done",
+      summary: "s",
+      messageIds: [m1.id],
+    });
     expect(await store.workItems.latestReport(two.id)).toBeNull();
   });
 });
@@ -183,15 +257,28 @@ describe("topics", () => {
     const { copies } = await store.topics.publish("news", "a", "hello");
 
     expect(copies.map((m) => m.to)).toEqual(["b", "c"]);
-    expect(copies[0]).toMatchObject({ from: "a", body: "hello", topic: "news", workItemId: null, ackedAt: null });
+    expect(copies[0]).toMatchObject({
+      from: "a",
+      body: "hello",
+      topic: "news",
+      workItemId: null,
+      ackedAt: null,
+    });
     expect(await store.messages.unacked("a")).toEqual([]);
-    expect((await store.messages.unacked("b"))[0]).toMatchObject({ topic: "news", body: "hello" });
+    expect((await store.messages.unacked("b"))[0]).toMatchObject({
+      topic: "news",
+      body: "hello",
+    });
     expect(await wakeNames(store)).toEqual(["b", "c"]);
   });
 
   it("a publisher that is not a subscriber reaches everyone", async () => {
     await subscribers("news", ["a", "b"]);
-    expect((await store.topics.publish("news", "human", "x")).copies.map((m) => m.to)).toEqual(["a", "b"]);
+    expect(
+      (await store.topics.publish("news", "human", "x")).copies.map(
+        (m) => m.to,
+      ),
+    ).toEqual(["a", "b"]);
   });
 
   it("publishing to a topic nobody listens to delivers nothing and creates no mail", async () => {
@@ -210,11 +297,15 @@ describe("topics", () => {
   it("subscribe is idempotent and unsubscribe stops delivery", async () => {
     await subscribers("news", ["a"]);
     await store.topics.subscribe("news", "a");
-    expect((await store.topics.publish("news", "human", "1")).copies).toHaveLength(1);
+    expect(
+      (await store.topics.publish("news", "human", "1")).copies,
+    ).toHaveLength(1);
 
     await store.topics.unsubscribe("news", "a");
     await store.topics.unsubscribe("news", "a");
-    expect((await store.topics.publish("news", "human", "2")).copies).toEqual([]);
+    expect((await store.topics.publish("news", "human", "2")).copies).toEqual(
+      [],
+    );
   });
 
   it("only delivers to subscribers present at publish time: nothing is replayed to late joiners", async () => {
@@ -274,7 +365,9 @@ describe("message log", () => {
 
   it("without a cursor returns the newest `limit`, still oldest first", async () => {
     await seed();
-    expect((await store.messages.list({ limit: 2 })).map((m) => m.body)).toEqual(["4", "5"]);
+    expect(
+      (await store.messages.list({ limit: 2 })).map((m) => m.body),
+    ).toEqual(["4", "5"]);
   });
 
   it("with a cursor returns what came after it, so a poller never misses or repeats a message", async () => {
@@ -288,10 +381,16 @@ describe("message log", () => {
 
   it("filters by topic and by agent (either end of the message)", async () => {
     await seed();
-    expect((await store.messages.list({ topic: "t" })).map((m) => m.body)).toEqual(["4"]);
-    expect((await store.messages.list({ agent: "a" })).map((m) => m.body)).toEqual(["1", "2", "4"]);
-    expect((await store.messages.list({ agent: "c" })).map((m) => m.body)).toEqual(["4"]);
-    expect((await store.messages.list({ agent: "b", topic: "t" }))).toEqual([]);
+    expect(
+      (await store.messages.list({ topic: "t" })).map((m) => m.body),
+    ).toEqual(["4"]);
+    expect(
+      (await store.messages.list({ agent: "a" })).map((m) => m.body),
+    ).toEqual(["1", "2", "4"]);
+    expect(
+      (await store.messages.list({ agent: "c" })).map((m) => m.body),
+    ).toEqual(["4"]);
+    expect(await store.messages.list({ agent: "b", topic: "t" })).toEqual([]);
   });
 
   it("clamps limit to 1..500", async () => {
@@ -305,16 +404,30 @@ describe("report list", () => {
   async function report(agent: string, summary: string) {
     await store.agents.touch(agent);
     const m = await store.messages.send({ from: "h", to: agent, body: "x" });
-    return store.reports.record({ agent, startedAt: new Date().toISOString(), outcome: "done", summary, messageIds: [m.id] });
+    return store.reports.record({
+      agent,
+      startedAt: new Date().toISOString(),
+      outcome: "done",
+      summary,
+      messageIds: [m.id],
+    });
   }
 
   it("lists newest first, optionally for one agent, capped by limit", async () => {
     await report("a", "a1");
     await report("b", "b1");
     await report("a", "a2");
-    expect((await store.reports.list({})).map((r) => r.summary)).toEqual(["a2", "b1", "a1"]);
-    expect((await store.reports.list({ agent: "a" })).map((r) => r.summary)).toEqual(["a2", "a1"]);
-    expect((await store.reports.list({ limit: 1 })).map((r) => r.summary)).toEqual(["a2"]);
+    expect((await store.reports.list({})).map((r) => r.summary)).toEqual([
+      "a2",
+      "b1",
+      "a1",
+    ]);
+    expect(
+      (await store.reports.list({ agent: "a" })).map((r) => r.summary),
+    ).toEqual(["a2", "a1"]);
+    expect(
+      (await store.reports.list({ limit: 1 })).map((r) => r.summary),
+    ).toEqual(["a2"]);
     expect(await store.reports.list({ agent: "nobody" })).toEqual([]);
   });
 });

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_WEB_PORTS, allowAllWebPolicy } from "../../src/server/substrate";
+import {
+  DEFAULT_WEB_PORTS,
+  allowAllWebPolicy,
+} from "../../src/server/substrate";
 
 describe("allowAllWebPolicy", () => {
   const policy = allowAllWebPolicy("folie", DEFAULT_WEB_PORTS);

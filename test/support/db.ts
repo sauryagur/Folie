@@ -7,28 +7,40 @@ import type { Store } from "../../src/server/store";
 
 type Q = Pick<PGlite, "query" | "exec">;
 
-const queryOn = (q: Q) => async (text: string, params?: unknown[]): Promise<{ rows: Row[] }> => {
-  // PGlite's query() takes one statement; the schema script has many and no params, so route it to exec().
-  if (!params) return { rows: ((await q.exec(text)).at(-1)?.rows ?? []) as Row[] };
-  return { rows: (await q.query(text, params)).rows as Row[] };
-};
+const queryOn =
+  (q: Q) =>
+  async (text: string, params?: unknown[]): Promise<{ rows: Row[] }> => {
+    // PGlite's query() takes one statement; the schema script has many and no params, so route it to exec().
+    if (!params)
+      return { rows: ((await q.exec(text)).at(-1)?.rows ?? []) as Row[] };
+    return { rows: (await q.query(text, params)).rows as Row[] };
+  };
 
 export async function testDatabase(): Promise<Database> {
   const pg = new PGlite();
   const db: Database = {
     query: queryOn(pg),
-    transaction: (fn) => pg.transaction((tx) => fn({ query: queryOn(tx as unknown as Q) })),
+    transaction: (fn) =>
+      pg.transaction((tx) => fn({ query: queryOn(tx as unknown as Q) })),
     close: () => pg.close(),
   };
   await migrate(db);
   return db;
 }
 
-export async function testStore(): Promise<{ db: Database; store: Store; reset: () => Promise<void> }> {
+export async function testStore(): Promise<{
+  db: Database;
+  store: Store;
+  reset: () => Promise<void>;
+}> {
   const db = await testDatabase();
-  const reset = async () => void (await db.query("TRUNCATE agents, work_items, messages, sessions, reports, session_events RESTART IDENTITY CASCADE"));
+  const reset = async () =>
+    void (await db.query(
+      "TRUNCATE agents, work_items, messages, sessions, reports, session_events RESTART IDENTITY CASCADE",
+    ));
   return { db, store: pgStore(db), reset };
 }
 
 /** Names of the agents the controller would wake right now. */
-export const wakeNames = async (store: Store): Promise<string[]> => (await store.agents.wakeDemand()).map((d) => d.name);
+export const wakeNames = async (store: Store): Promise<string[]> =>
+  (await store.agents.wakeDemand()).map((d) => d.name);

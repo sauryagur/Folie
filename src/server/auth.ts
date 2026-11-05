@@ -28,8 +28,10 @@ export function constantTimeEqual(a: string, b: string): boolean {
 export function extractBearer(header: string | string[] | undefined): string {
   if (!header) throw new UnauthorizedError("missing Authorization header");
   const value = Array.isArray(header) ? header[0] : header;
-  if (typeof value !== "string") throw new UnauthorizedError("invalid Authorization header");
-  if (!value.startsWith("Bearer ")) throw new UnauthorizedError("Authorization must be Bearer <token>");
+  if (typeof value !== "string")
+    throw new UnauthorizedError("invalid Authorization header");
+  if (!value.startsWith("Bearer "))
+    throw new UnauthorizedError("Authorization must be Bearer <token>");
   const token = value.slice(7).trim();
   if (!token) throw new UnauthorizedError("missing bearer token");
   return token;

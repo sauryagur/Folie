@@ -22,7 +22,10 @@ describe("provider safety", () => {
   it("default resources are bounded, never unlimited (R-6.11)", () => {
     expect(parseResources(undefined)).toEqual({ cpu: "500m", memory: "512Mi" });
     expect(parseResources("")).toEqual({ cpu: "500m", memory: "512Mi" });
-    expect(parseResources("cpu=250m,memory=256Mi")).toEqual({ cpu: "250m", memory: "256Mi" });
+    expect(parseResources("cpu=250m,memory=256Mi")).toEqual({
+      cpu: "250m",
+      memory: "256Mi",
+    });
     // A caller that wants unlimited must change config code, not just unset env.
     expect(parseResources(undefined)?.cpu).not.toBeUndefined();
     expect(parseResources(undefined)?.memory).not.toBeUndefined();

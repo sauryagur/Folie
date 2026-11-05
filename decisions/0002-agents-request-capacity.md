@@ -8,12 +8,12 @@ Today any `send`, `subscribe` or `publish` to an unknown name creates an agent r
 
 ## Options
 
-| Option | For | Against |
-| --- | --- | --- |
-| A. Free creation (today) | No friction | Unbounded cost and sandboxes; evades any budget; identity sprawl |
-| B. Creation with a budget carve-out | Bounded cost | Agents define arbitrary configs (harness, tools, grants); privilege escalation by constructing a stronger agent |
-| C. **Capacity request** against human-managed profiles | Bounded by policy, budget and caps; no escalation (grants subset of requester's); registration stays a runtime act | Less flexible than free-form creation; profiles must be curated |
-| D. No spawning at all; fixed fleet | Simplest | A goal that needs more parallelism than the fleet cannot get it |
+| Option                                                 | For                                                                                                                | Against                                                                                                         |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| A. Free creation (today)                               | No friction                                                                                                        | Unbounded cost and sandboxes; evades any budget; identity sprawl                                                |
+| B. Creation with a budget carve-out                    | Bounded cost                                                                                                       | Agents define arbitrary configs (harness, tools, grants); privilege escalation by constructing a stronger agent |
+| C. **Capacity request** against human-managed profiles | Bounded by policy, budget and caps; no escalation (grants subset of requester's); registration stays a runtime act | Less flexible than free-form creation; profiles must be curated                                                 |
+| D. No spawning at all; fixed fleet                     | Simplest                                                                                                           | A goal that needs more parallelism than the fleet cannot get it                                                 |
 
 ## Decision
 

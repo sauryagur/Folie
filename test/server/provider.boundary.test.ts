@@ -4,14 +4,24 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const PROVIDER_EXPORTS = /\bAxClient|AxTaskSpec|atespace|AxPhase|SuspendTask|CreateTask\b/;
+const PROVIDER_EXPORTS =
+  /\bAxClient|AxTaskSpec|atespace|AxPhase|SuspendTask|CreateTask\b/;
 
 describe("provider boundary", () => {
   it("only the ax adapter and the composition root know ax exists", () => {
     for (const f of readdirSync("src/server")) {
-      if (!f.endsWith(".ts") || f === "ax.ts" || f === "main.ts" || f === "substrate.ts" || f === "grpc.ts") continue;
+      if (
+        !f.endsWith(".ts") ||
+        f === "ax.ts" ||
+        f === "main.ts" ||
+        f === "substrate.ts" ||
+        f === "grpc.ts"
+      )
+        continue;
       const src = readFileSync(join("src/server", f), "utf8");
-      expect(src, `${f} must not import the ax adapter`).not.toMatch(/from "\.\/ax"|from "\.\/substrate"/);
+      expect(src, `${f} must not import the ax adapter`).not.toMatch(
+        /from "\.\/ax"|from "\.\/substrate"/,
+      );
     }
   });
 

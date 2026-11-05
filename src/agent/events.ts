@@ -23,7 +23,10 @@ export class EventSink {
 
   emit(type: SessionEventType, data: Record<string, unknown>): void {
     const json = JSON.stringify(data);
-    const clipped = json.length > MAX_DATA_CHARS ? { truncated: true, preview: json.slice(0, MAX_DATA_CHARS / 2) } : data;
+    const clipped =
+      json.length > MAX_DATA_CHARS
+        ? { truncated: true, preview: json.slice(0, MAX_DATA_CHARS / 2) }
+        : data;
     this.pending.push({ seq: this.seq++, type, data: clipped });
   }
 

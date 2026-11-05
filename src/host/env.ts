@@ -42,11 +42,24 @@ export async function must(cmd: string[], opts?: RunOpts) {
 }
 
 /** Runs a command and returns trimmed stdout; throws on non-zero exit. */
-export async function capture(cmd: string[], opts: RunOpts = {}): Promise<string> {
-  const p = Bun.spawn(cmd, { cwd: opts.cwd, env: { ...env(), ...opts.env }, stdout: "pipe", stderr: "inherit" });
+export async function capture(
+  cmd: string[],
+  opts: RunOpts = {},
+): Promise<string> {
+  const p = Bun.spawn(cmd, {
+    cwd: opts.cwd,
+    env: { ...env(), ...opts.env },
+    stdout: "pipe",
+    stderr: "inherit",
+  });
   const out = await new Response(p.stdout).text();
   if ((await p.exited) !== 0) throw new Error(`failed: ${cmd.join(" ")}`);
   return out.trim();
 }
 
-export const kubectl = (...args: string[]) => ["kubectl", "--context", CONTEXT, ...args];
+export const kubectl = (...args: string[]) => [
+  "kubectl",
+  "--context",
+  CONTEXT,
+  ...args,
+];

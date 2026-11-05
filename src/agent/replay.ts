@@ -20,16 +20,27 @@ const CODING_TOOL_REPLAY: Record<string, "safe" | "never"> = {
 };
 
 /** A tool with no declared policy is treated as unsafe to repeat. */
-export const replayPolicy = (tool: AgentTool): "safe" | "never" => tool.replay ?? CODING_TOOL_REPLAY[tool.name] ?? "never";
+export const replayPolicy = (tool: AgentTool): "safe" | "never" =>
+  tool.replay ?? CODING_TOOL_REPLAY[tool.name] ?? "never";
 
 /**
  * Idempotent native tools whose effect is a state change the session intended. When a crash interrupted one,
  * the restarted session re-runs it to restore that state. Pure reads have nothing to restore.
  */
-export const AUTO_REPLAY = new Set(["topic_subscribe", "topic_unsubscribe", "artifact_register"]);
+export const AUTO_REPLAY = new Set([
+  "topic_subscribe",
+  "topic_unsubscribe",
+  "artifact_register",
+]);
 
 const stable = (v: unknown): string =>
-  JSON.stringify(v, (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
+  JSON.stringify(v, (_, x) =>
+    x && typeof x === "object" && !Array.isArray(x)
+      ? Object.fromEntries(
+          Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1)),
+        )
+      : x,
+  );
 
 /**
  * Deterministic idempotency keys for network side effects. The nth identical call (same tool, same args) at a
@@ -44,7 +55,10 @@ export class RequestIds {
     const base = `${this.scope}|${tool}|${stable(args)}`;
     const n = (this.seen.get(base) ?? 0) + 1;
     this.seen.set(base, n);
-    return createHash("sha256").update(`${base}|${n}`).digest("hex").slice(0, 32);
+    return createHash("sha256")
+      .update(`${base}|${n}`)
+      .digest("hex")
+      .slice(0, 32);
   }
 }
 

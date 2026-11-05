@@ -2,7 +2,7 @@
 
 Status: **target specification**. State and transitions: [`domain-model.md`](domain-model.md). Contracts: [`interfaces.md`](interfaces.md). Rationale: [`../decisions/`](../decisions/README.md).
 
-Every protocol below follows the same discipline: agents *propose and negotiate* over messages; the runtime *decides* with one conditional database update; correctness never depends on an agent obeying a message. Failure behaviour is stated per protocol.
+Every protocol below follows the same discipline: agents _propose and negotiate_ over messages; the runtime _decides_ with one conditional database update; correctness never depends on an agent obeying a message. Failure behaviour is stated per protocol.
 
 Contents: [1 Authentication](#1-authentication-and-the-request-envelope) · [2 Messaging](#2-messaging-delivery-wake-steering-interrupt) · [3 Task operations](#3-task-operations) · [4 Leases and stale holders](#4-leases-and-stale-holders) · [5 Discovery](#5-discovery) · [6 Negotiation](#6-negotiation-offers-bids-help-handoff) · [7 Team formation](#7-team-formation) · [8 Verification](#8-verification) · [9 Revision and supersession](#9-revision-dependency-change-and-supersession) · [10 Goal evaluation](#10-goal-evaluation) · [11 Gateway and approvals](#11-gateway-invocation-and-approvals) · [12 Budgets](#12-budgets) · [13 Human intervention](#13-human-intervention) · [14 Execution loss](#14-execution-lifecycle-loss-and-reconciliation) · [15 Capacity requests](#15-capacity-requests) · [16 Progress and runaway limits](#16-progress-stall-detection-and-runaway-limits)
 
@@ -21,20 +21,20 @@ Contents: [1 Authentication](#1-authentication-and-the-request-envelope) · [2 M
 
 **Request envelope.** `Authorization: Bearer …`, `traceparent`, `tracestate`, optional `Idempotency-Key` (alias of body `request_id`). Errors: `{ "error": { "code", "message", "details" } }`.
 
-| Code | HTTP | Meaning |
-| --- | --- | --- |
-| `unauthenticated` | 401 | No or unknown token. |
-| `token_revoked` | 401 | Credential generation, execution or agent status no longer valid. The shim stops. |
-| `forbidden`, `policy_denied` | 403 | Grant missing, or policy denied (details: rule id). |
-| `invalid_transition` | 409 | State machine does not allow it. |
-| `stale_fence`, `already_claimed` | 409 | Fencing or claim conflict; details carry the current owner and fence. |
-| `insufficient_budget` | 402 | Reservation or carve-out failed. |
-| `quota_exceeded` | 429 | Proposal, message or fan-out limits. |
-| `approval_required` | 202 | Accepted for approval; body has `approval_id`. |
+| Code                             | HTTP | Meaning                                                                           |
+| -------------------------------- | ---- | --------------------------------------------------------------------------------- |
+| `unauthenticated`                | 401  | No or unknown token.                                                              |
+| `token_revoked`                  | 401  | Credential generation, execution or agent status no longer valid. The shim stops. |
+| `forbidden`, `policy_denied`     | 403  | Grant missing, or policy denied (details: rule id).                               |
+| `invalid_transition`             | 409  | State machine does not allow it.                                                  |
+| `stale_fence`, `already_claimed` | 409  | Fencing or claim conflict; details carry the current owner and fence.             |
+| `insufficient_budget`            | 402  | Reservation or carve-out failed.                                                  |
+| `quota_exceeded`                 | 429  | Proposal, message or fan-out limits.                                              |
+| `approval_required`              | 202  | Accepted for approval; body has `approval_id`.                                    |
 
 **Failure behaviour.** A `401 token_revoked` is terminal for that process: the shim cancels the harness, flushes what it can, and idles (it does not exit; ax does not read exit codes, [`current-system.md`](../architecture/current-system.md#agent-image)). It cannot be woken until a new execution with a new token exists.
 
-**Security note.** The token is in the sandbox environment. In `dev-full-trust` a compromised agent can use its *own* token (that is what an agent is); what it cannot do is act as another agent, outlive revocation, or reach credentials, which never enter the sandbox ([§11](#11-gateway-invocation-and-approvals)).
+**Security note.** The token is in the sandbox environment. In `dev-full-trust` a compromised agent can use its _own_ token (that is what an agent is); what it cannot do is act as another agent, outlive revocation, or reach credentials, which never enter the sandbox ([§11](#11-gateway-invocation-and-approvals)).
 
 ## 2. Messaging: delivery, wake, steering, interrupt
 
@@ -46,24 +46,24 @@ Contents: [1 Authentication](#1-authentication-and-the-request-envelope) · [2 M
 
 **Delivery semantics.** At-least-once. A delivery moves `pending → leased → acked` ([domain model §4.5](domain-model.md#45-message-delivery)). A session consumes (leases) deliveries; the session's settlement acks them; an `abandoned` session returns them to `pending`, up to `max_deliveries` (default 3), then `dead_lettered`. Consumer idempotency is by delivery id. Ordering within an inbox: `priority`, then id; ordering across senders is not guaranteed beyond id order.
 
-**What wakes an idle agent.** Invariant 3 stays: *a delivery in the inbox is the only wake*, so every wake is logged. Rules that keep it from becoming a storm:
+**What wakes an idle agent.** Invariant 3 stays: _a delivery in the inbox is the only wake_, so every wake is logged. Rules that keep it from becoming a storm:
 
-| Delivery | Wakes a suspended or retired agent? |
-| --- | --- |
-| `urgent` (any kind) | Immediately. |
-| `normal` | Yes, at the next controller pass. |
-| `low` | No. It waits for the next wake (or a 15 min digest flush). |
-| `expires_at` passed | Never; swept to `expired`. |
+| Delivery            | Wakes a suspended or retired agent?                        |
+| ------------------- | ---------------------------------------------------------- |
+| `urgent` (any kind) | Immediately.                                               |
+| `normal`            | Yes, at the next controller pass.                          |
+| `low`               | No. It waits for the next wake (or a 15 min digest flush). |
+| `expires_at` passed | Never; swept to `expired`.                                 |
 
 System events that agents must react to (offers, nominations, approval results, verification requests, lease warnings) are deliveries of the matching `kind`. There are no hidden timers or side channels.
 
 **Reaching an active session (steering and interrupt).** The agent shim runs a **control watcher** independent of the model loop: a long-poll (`GET /v1/agents/me/control?after=`; SSE when available) that returns within ~1 s of an `urgent` delivery or a control signal. It is the shim's code, not a model tool, so it works while the model is mid-generation or a tool runs for hours (today's limit: steering lands only at turn boundaries and cannot interrupt a long tool; D10).
 
-| Arrives | Shim action |
-| --- | --- |
-| `normal`/`low` mail for the session's scope | Hold until the next turn boundary, then `harness.deliver(msgs, "steer")` (today's mechanism). If the harness lacks `deliver`, queue it for the next session. |
-| `urgent` mail | `harness.deliver(msgs, "steer")` at the next safe point; if the harness cannot, `cancel` with reason `urgent_mail` and let the next session consume it. |
-| `control: cancel`, `pause`, `lease_lost`, `stop` | `harness.cancel(reason, grace)`. |
+| Arrives                                          | Shim action                                                                                                                                                  |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `normal`/`low` mail for the session's scope      | Hold until the next turn boundary, then `harness.deliver(msgs, "steer")` (today's mechanism). If the harness lacks `deliver`, queue it for the next session. |
+| `urgent` mail                                    | `harness.deliver(msgs, "steer")` at the next safe point; if the harness cannot, `cancel` with reason `urgent_mail` and let the next session consume it.      |
+| `control: cancel`, `pause`, `lease_lost`, `stop` | `harness.cancel(reason, grace)`.                                                                                                                             |
 
 `cancel` is **cooperative, then forced**: (1) set the session's abort signal and abort the in-flight model request; (2) signal running tools (`bash`: SIGTERM to the process group); (3) after `grace` (default 20 s) SIGKILL what remains; (4) settle the session `cancelled` with the partial usage and mark in-flight `replay: never` journal entries `interrupted`; the next attempt is told, as today ([Replay safety](../architecture/current-system.md#replay-safety)). A shim that does not heartbeat is handled by the runtime, not by messages: [§4](#4-leases-and-stale-holders) and [§14](#14-execution-lifecycle-loss-and-reconciliation). **Safe interruption therefore means: the transcript and workspace are intact, the outcome is recorded, no effect is claimed to be undone.**
 
@@ -75,17 +75,17 @@ System events that agents must react to (offers, nominations, approval results, 
 
 All calls are authenticated ([§1](#1-authentication-and-the-request-envelope)), idempotent by `request_id`, and write one ledger event.
 
-| Operation | Caller | Notes |
-| --- | --- | --- |
-| `task.propose(goal, spec, contract, deps, budget_ask, dedup_key?, parent?)` | agent, human | → T1. Returns `{task, similar: [...]}`; `similar` lists live tasks with the same `dedup_key` or text similarity above `similar_threshold`. |
-| `task.accept` / `task.reject` | owner, human; runtime in `auto` mode | → T2/T3. |
-| `task.claim(task)` | agent | → T6. |
-| `task.start(task, fence)` | shim | → T7; sent automatically when the session for the task begins. |
-| `task.heartbeat(task, fence, progress)` | shim only | Extends the lease. Not a model tool. |
-| `task.submit(task, fence, result)` | holder | → T11. |
-| `task.block(task, fence, blocked_on)`, `task.release(task, fence)`, `task.fail(task, fence, class, reason)` | holder | → T9, T8, T17. |
-| `task.cancel`, `task.supersede`, `task.reopen` | owner, human | → T18–T20. |
-| `task.list(filter)`, `task.get(id)`, `task.history(id)` | agent, human | Indexed reads ([§5](#5-discovery)). |
+| Operation                                                                                                   | Caller                               | Notes                                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `task.propose(goal, spec, contract, deps, budget_ask, dedup_key?, parent?)`                                 | agent, human                         | → T1. Returns `{task, similar: [...]}`; `similar` lists live tasks with the same `dedup_key` or text similarity above `similar_threshold`. |
+| `task.accept` / `task.reject`                                                                               | owner, human; runtime in `auto` mode | → T2/T3.                                                                                                                                   |
+| `task.claim(task)`                                                                                          | agent                                | → T6.                                                                                                                                      |
+| `task.start(task, fence)`                                                                                   | shim                                 | → T7; sent automatically when the session for the task begins.                                                                             |
+| `task.heartbeat(task, fence, progress)`                                                                     | shim only                            | Extends the lease. Not a model tool.                                                                                                       |
+| `task.submit(task, fence, result)`                                                                          | holder                               | → T11.                                                                                                                                     |
+| `task.block(task, fence, blocked_on)`, `task.release(task, fence)`, `task.fail(task, fence, class, reason)` | holder                               | → T9, T8, T17.                                                                                                                             |
+| `task.cancel`, `task.supersede`, `task.reopen`                                                              | owner, human                         | → T18–T20.                                                                                                                                 |
+| `task.list(filter)`, `task.get(id)`, `task.history(id)`                                                     | agent, human                         | Indexed reads ([§5](#5-discovery)).                                                                                                        |
 
 **Claim** (the whole protocol; one statement decides):
 
@@ -131,27 +131,27 @@ RETURNING id;                                 -- 0 rows => 409 stale_fence
 
 The **sweeper** (leader-only, every 5 s; [deployment](../DESIGN.md#24-deployment-architecture)):
 
-1. *Expire*: `SELECT … WHERE lease_expires_at < now() AND status IN ('claimed','running') FOR UPDATE SKIP LOCKED` → T8 with `end_reason = 'lease_expired'`. `attempt` increments if the task had started; at `max_attempts` the transition is T17 with class `environment`.
-2. *Warn*: at 2/3 of the TTL without a heartbeat, a `system_notice` to the holder (diagnostic, not relied on).
-3. *Abandonment*: tasks `available` for longer than `abandon_after` (default 24 h) emit `task.abandoned` to the goal owner; `blocked` tasks past `blocked_ttl` likewise.
-4. *Stalls*, *drift* (`open_deps`, `satisfied` recomputed), *abandoned sessions*, expired offers and deliveries ([§16](#16-progress-stall-detection-and-runaway-limits)).
+1. _Expire_: `SELECT … WHERE lease_expires_at < now() AND status IN ('claimed','running') FOR UPDATE SKIP LOCKED` → T8 with `end_reason = 'lease_expired'`. `attempt` increments if the task had started; at `max_attempts` the transition is T17 with class `environment`.
+2. _Warn_: at 2/3 of the TTL without a heartbeat, a `system_notice` to the holder (diagnostic, not relied on).
+3. _Abandonment_: tasks `available` for longer than `abandon_after` (default 24 h) emit `task.abandoned` to the goal owner; `blocked` tasks past `blocked_ttl` likewise.
+4. _Stalls_, _drift_ (`open_deps`, `satisfied` recomputed), _abandoned sessions_, expired offers and deliveries ([§16](#16-progress-stall-detection-and-runaway-limits)).
 
 **A stale holder is harmless because every write is fenced, not because it is told to stop.** What a holder whose lease lapsed (or was revoked) can and cannot do:
 
-| Action by the stale holder | Result |
-| --- | --- |
-| `heartbeat` | `409 stale_fence` → shim cancels the harness. |
-| `submit`, `block`, `fail`, `release` | `409 stale_fence`. |
-| Upload artifacts with the old fence | Accepted into **quarantine** (`state = 'quarantined'`), never attached to the task, deleted after `quarantine_ttl`. The new holder can be offered them by a human, not automatically. |
-| Gateway invocation | `denied stale_fence`; an `authorized`-but-undispatched invocation is **re-checked at dispatch** and cancelled. |
-| Messages | Delivered (communication is not a state mutation). Marked `fence_valid = false` in the ledger when sent within a task scope. |
-| Effects already dispatched by sandbox-local tools | Not stoppable by Folie ([§13](#13-human-intervention) states this limit). |
+| Action by the stale holder                        | Result                                                                                                                                                                                |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `heartbeat`                                       | `409 stale_fence` → shim cancels the harness.                                                                                                                                         |
+| `submit`, `block`, `fail`, `release`              | `409 stale_fence`.                                                                                                                                                                    |
+| Upload artifacts with the old fence               | Accepted into **quarantine** (`state = 'quarantined'`), never attached to the task, deleted after `quarantine_ttl`. The new holder can be offered them by a human, not automatically. |
+| Gateway invocation                                | `denied stale_fence`; an `authorized`-but-undispatched invocation is **re-checked at dispatch** and cancelled.                                                                        |
+| Messages                                          | Delivered (communication is not a state mutation). Marked `fence_valid = false` in the ledger when sent within a task scope.                                                          |
+| Effects already dispatched by sandbox-local tools | Not stoppable by Folie ([§13](#13-human-intervention) states this limit).                                                                                                             |
 
 **Duplicate-work prevention** is the sum of: one conditional claim; `dedup_key` unique index; `similar` returned on propose; `claimed_by` visible in every discovery result; and the above fencing for the case where two executions both believe they hold the task.
 
 ## 5. Discovery
 
-**Decision ([ADR 0001](../decisions/0001-hybrid-discovery-runtime-claims.md)): hybrid.** The runtime *pushes summaries to a small ranked set of eligible agents*; agents *pull* by indexed query at any time. Nobody polls everything and nobody is woken en masse.
+**Decision ([ADR 0001](../decisions/0001-hybrid-discovery-runtime-claims.md)): hybrid.** The runtime _pushes summaries to a small ranked set of eligible agents_; agents _pull_ by indexed query at any time. Nobody polls everything and nobody is woken en masse.
 
 **Push: nomination.** On T4 (`available`) and on T8 (task freed):
 
@@ -183,12 +183,12 @@ nominate(task, round):
 
 **Principle.** Negotiation is messages with TTLs. The only authoritative outcomes are conditional updates. Waiting is never done while holding a lock or a lease that depends on a peer's answer.
 
-| Mechanism | Who | Authoritative effect |
-| --- | --- | --- |
-| **Claim** | any eligible agent | T6, first writer wins. Default. |
-| **Offer** (`task.offer(task, to, ttl)`) | goal owner on an `available` task; holder of a claimed task (handoff) | Target `accept` runs one transaction: for an `available` task it is a claim with source `offer`; for a held task it atomically sets `owner = target, fence = fence + 1`, supersedes the old owner claim and all non-owner claims. `decline` or TTL closes the offer. The offerer keeps ownership until acceptance, so there is never a gap or a double owner. |
-| **Help request** (`task.request_help(task, role, capability, count, ttl)`) | holder | Nominates like [§5](#5-discovery); each `accept` creates a `contributor` or `reviewer` claim (capped by `max_participants`, default 4). The owner can `dismiss`. |
-| **Bid** (`claim_mode = "bid"`) | any eligible agent | During `bid_window` (default 30 s) agents `task.bid(task, estimate, note)`; at close the runtime picks the best score ([§5](#5-discovery)); ties broken by `hash(task_id, agent)` so the result is deterministic and reproducible. Losers are notified. |
+| Mechanism                                                                  | Who                                                                   | Authoritative effect                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Claim**                                                                  | any eligible agent                                                    | T6, first writer wins. Default.                                                                                                                                                                                                                                                                                                                               |
+| **Offer** (`task.offer(task, to, ttl)`)                                    | goal owner on an `available` task; holder of a claimed task (handoff) | Target `accept` runs one transaction: for an `available` task it is a claim with source `offer`; for a held task it atomically sets `owner = target, fence = fence + 1`, supersedes the old owner claim and all non-owner claims. `decline` or TTL closes the offer. The offerer keeps ownership until acceptance, so there is never a gap or a double owner. |
+| **Help request** (`task.request_help(task, role, capability, count, ttl)`) | holder                                                                | Nominates like [§5](#5-discovery); each `accept` creates a `contributor` or `reviewer` claim (capped by `max_participants`, default 4). The owner can `dismiss`.                                                                                                                                                                                              |
+| **Bid** (`claim_mode = "bid"`)                                             | any eligible agent                                                    | During `bid_window` (default 30 s) agents `task.bid(task, estimate, note)`; at close the runtime picks the best score ([§5](#5-discovery)); ties broken by `hash(task_id, agent)` so the result is deterministic and reproducible. Losers are notified.                                                                                                       |
 
 **Rules that prevent deadlock and livelock.**
 
@@ -212,7 +212,7 @@ A team is a scoped set of agents with a channel, a budget slice and a context pa
 3. **Accept.** `team.join(team, label)` / `team.decline`. A join succeeds if the team is `forming`/`active`, not full, and the agent is eligible. Joining subscribes the agent to the channel and, for a task scope, creates a `contributor` claim. The team becomes `active` at `min_members` or on convener `activate`. At `form_by` with too few members the team is dissolved and the budget returned.
 4. **Divide responsibility.** The charter records `responsibilities` per member in text. When the work separates cleanly the convener proposes **subtasks assigned to members** (`task.propose` with `assign_to`; the member's join is the consent). A shared task is for tightly coupled work only.
 5. **Share context without a shared transcript.** The team **context pack** is: the charter; **team notes** (`memories` with `scope = team`: decisions, findings, open questions, each with provenance); the team's artifacts; and channel history by cursor. A session's context assembler includes the charter and a token-budgeted selection of notes ([agents-and-execution](../architecture/agents-and-execution.md#context-assembly)). Notes are periodically compacted by `team.digest` (a note that `supersedes` older ones; the older ones are kept). The channel is for conversation, the notes for what must be remembered.
-6. **Disagree.** Same ladder as [§6](#6-negotiation-offers-bids-help-handoff). A *decision* is a note with `status: proposed | ratified | overruled`; the convener ratifies; any member may escalate.
+6. **Disagree.** Same ladder as [§6](#6-negotiation-offers-bids-help-handoff). A _decision_ is a note with `status: proposed | ratified | overruled`; the convener ratifies; any member may escalate.
 7. **Dissolve.** On `team.dissolve` by the convener, on the scope reaching a terminal state, on `idle_dissolve` (24 h without activity), or when members fall below `min_members` for longer than a grace period. Participation claims are released; the budget remainder returns to the scope; the team record, channel history and notes are retained read-only. Notes worth keeping are **promoted** to goal knowledge with provenance, by the convener or by the dissolution job (default: notes marked `keep`).
 
 **Failure behaviour.** A convener that vanishes: a member may take convener role by `team.convene` after the convener's session has been `abandoned` for a lease TTL; otherwise the team dissolves at `idle_dissolve`. Members that vanish lose their participation claim on lease expiry; the team continues if `min_members` holds.
@@ -235,18 +235,18 @@ Contracts are defined in [`domain-model.md` §7](domain-model.md#7-completion-is
 
 ## 9. Revision, dependency change and supersession
 
-**Goal revision.** `goal.revise(expected_revision, new_text, new_criteria, reason)` → [domain model §4.1](domain-model.md#41-goal). On commit every non-terminal task of an older revision gets `stale_revision = true`. Effects: stale tasks cannot be *newly claimed*; a holder is messaged (`control: revision_changed`) and must `task.confirm_revision` (still valid, optionally with a revised contract through supersede) or `task.supersede`; a stale `submitted` task is not accepted (T12 guard). `reconcile_by` (default 2 h) after which unresolved stale tasks surface to the goal owner as `task.stale_unresolved`.
+**Goal revision.** `goal.revise(expected_revision, new_text, new_criteria, reason)` → [domain model §4.1](domain-model.md#41-goal). On commit every non-terminal task of an older revision gets `stale_revision = true`. Effects: stale tasks cannot be _newly claimed_; a holder is messaged (`control: revision_changed`) and must `task.confirm_revision` (still valid, optionally with a revised contract through supersede) or `task.supersede`; a stale `submitted` task is not accepted (T12 guard). `reconcile_by` (default 2 h) after which unresolved stale tasks surface to the goal owner as `task.stale_unresolved`.
 
 **Dependency changes** (scenario: dependencies change during execution). `task.add_dependency` / `task.remove_dependency` are allowed to the task owner or goal owner and re-run the acyclicity check (recursive CTE, depth bound 64) in the transaction.
 
-| Change | Effect on a `running` task |
-| --- | --- |
-| New hard dependency, already satisfied | None. Recorded. |
-| New hard dependency, not satisfied | `on_dep_change` on the task: `block` (default; T9 with `blocked_on dependency`) or `continue` (owner accepts the risk; the acceptance guard refuses submission until the dependency is satisfied). |
+| Change                                     | Effect on a `running` task                                                                                                                                                                                                                             |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| New hard dependency, already satisfied     | None. Recorded.                                                                                                                                                                                                                                        |
+| New hard dependency, not satisfied         | `on_dep_change` on the task: `block` (default; T9 with `blocked_on dependency`) or `continue` (owner accepts the risk; the acceptance guard refuses submission until the dependency is satisfied).                                                     |
 | An upstream task is superseded or reopened | Edge `satisfied = false`; downstream `available` tasks go back to `accepted` (T5); a running downstream task gets `control: input_changed` and its acceptance guard (inputs' producers not superseded) refuses submission until the owner re-confirms. |
-| Upstream replaced by `{T'}` | If the supersede call said `rewire: true`, edges are rewritten to `T'` in the same transaction, else downstream tasks are flagged and the owner decides. |
+| Upstream replaced by `{T'}`                | If the supersede call said `rewire: true`, edges are rewritten to `T'` in the same transaction, else downstream tasks are flagged and the owner decides.                                                                                               |
 
-**Supersession.** `task.supersede(task, replacements[])` is T19. Non-terminal descendants are *not* cascaded automatically; they are listed in the response and flagged `orphaned`, and the owner or a human cancels, re-parents or keeps them. Cascades are a choice, never a side effect.
+**Supersession.** `task.supersede(task, replacements[])` is T19. Non-terminal descendants are _not_ cascaded automatically; they are listed in the response and flagged `orphaned`, and the owner or a human cancels, re-parents or keeps them. Cascades are a choice, never a side effect.
 
 **Plan change bundle.** `plan.change({supersede[], propose[], edges[]})` is applied atomically with a net budget check, under the goal's `acceptance_mode` for the bundle as a whole. This is how an agent replans without leaving the graph half-edited.
 
@@ -255,7 +255,7 @@ Contracts are defined in [`domain-model.md` §7](domain-model.md#7-completion-is
 Trigger: the owner or an agent with grant calls `goal.request_evaluation`, or the runtime does when no non-terminal task remains. `evaluating`, then:
 
 1. **Coverage (deterministic).** Acceptance criteria carry ids; tasks declare `satisfies: [criterion ids]`; each criterion needs at least one `verified` task, or direct evidence.
-2. **Goal checks.** The goal's `acceptance` contract (same shape as a task contract) creates verification rows with `subject_kind = goal`; deterministic adapters, verify tasks and human checks run as in [§8](#8-verification), with independence excluding *every* agent that produced a task of the goal if `independence.strict` is set.
+2. **Goal checks.** The goal's `acceptance` contract (same shape as a task contract) creates verification rows with `subject_kind = goal`; deterministic adapters, verify tasks and human checks run as in [§8](#8-verification), with independence excluding _every_ agent that produced a task of the goal if `independence.strict` is set.
 3. **Verdict** (`goal_evaluations`): `achieved` | `partially` | `not_achieved` | `inconclusive`, with `caveats` and `unmet_criteria`.
 4. `achieved` → goal `achieved` (human approval first if `approval.final`). Otherwise the goal returns to `active` and the runtime proposes one low-priority `reconcile` task per unmet criterion (a mechanical gap listing, not planning), which any agent may claim or supersede.
 
@@ -296,22 +296,22 @@ invoke(principal, tool, args, idempotency_key?)                          # POST 
 
 Model: [`domain-model.md`](domain-model.md#5-logical-schema-illustrative-ddl) (`budgets`, `budget_reservations`, `usage_records`); one tree per dimension.
 
-| Operation | Rule |
-| --- | --- |
+| Operation                  | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Carve-out** (delegation) | A child budget's limit is taken from the parent's headroom: `UPDATE parent SET reserved = reserved + $n WHERE limit_amount - reserved - spent >= $n`. A task's budget is carved from the goal's at acceptance (T2); a subtask's from its parent task's; a team's from its scope's; a verify task's from the task's `verification_budget`; a spawned agent's from the requester's ([§15](#15-capacity-requests)). `task.propose.budget_ask` exceeding the parent's headroom fails `insufficient_budget`. |
-| **Reserve** | For a cost knowable in advance (a gateway call with a declared maximum, a model request's `max_tokens × price`): `reserved += n` on the leaf only if headroom allows. |
-| **Commit** | Actual usage arrives as a `usage_record` (basis `measured`, `estimated` or `external_charge`): `spent += actual`, release the hold. Actual may exceed the hold (we learn the cost afterwards): the overrun is recorded, the budget flips `exhausted`, and `control: stop` is queued. |
-| **Close** | When the owner scope ends: `parent.reserved -= child.limit; parent.spent += child.spent`. Unspent is thereby returned. |
+| **Reserve**                | For a cost knowable in advance (a gateway call with a declared maximum, a model request's `max_tokens × price`): `reserved += n` on the leaf only if headroom allows.                                                                                                                                                                                                                                                                                                                                   |
+| **Commit**                 | Actual usage arrives as a `usage_record` (basis `measured`, `estimated` or `external_charge`): `spent += actual`, release the hold. Actual may exceed the hold (we learn the cost afterwards): the overrun is recorded, the budget flips `exhausted`, and `control: stop` is queued.                                                                                                                                                                                                                    |
+| **Close**                  | When the owner scope ends: `parent.reserved -= child.limit; parent.spent += child.spent`. Unspent is thereby returned.                                                                                                                                                                                                                                                                                                                                                                                  |
 
 **Evasion is closed structurally.** Spawning agents or delegating work requires a carve-out from the requester's own budget, so total spend is bounded by the root goal budget. Agents are created only through registration or a capacity grant ([§15](#15-capacity-requests); today they are created by any `send`, D2).
 
 **Enforcement tiers.** Stated per dimension so no one over-claims:
 
-| Tier | How | Overshoot bound | Applies to |
-| --- | --- | --- | --- |
-| **E0** record only | Usage is stored | unbounded | Today. |
-| **E1** cooperative cutoff | The harness reports usage per turn (`usage` events); the server updates `spent` and, on exhaustion, queues `control: stop`; the shim cancels | one model turn plus one tool call | LLM tokens and cost (required); compute seconds; tool calls. |
-| **E2** gateway-enforced | Pre-authorization at the choke point before the cost occurs | the reservation | Gateway tools; LLM spend once model calls pass through a Folie LLM proxy that holds the key ([ADR 0007](../decisions/0007-gateway-credentials-budgets.md)). |
+| Tier                      | How                                                                                                                                          | Overshoot bound                   | Applies to                                                                                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **E0** record only        | Usage is stored                                                                                                                              | unbounded                         | Today.                                                                                                                                                      |
+| **E1** cooperative cutoff | The harness reports usage per turn (`usage` events); the server updates `spent` and, on exhaustion, queues `control: stop`; the shim cancels | one model turn plus one tool call | LLM tokens and cost (required); compute seconds; tool calls.                                                                                                |
+| **E2** gateway-enforced   | Pre-authorization at the choke point before the cost occurs                                                                                  | the reservation                   | Gateway tools; LLM spend once model calls pass through a Folie LLM proxy that holds the key ([ADR 0007](../decisions/0007-gateway-credentials-budgets.md)). |
 
 **Estimated vs measured vs external.** `estimated` (catalog price × tokens, today's `cost.total`), `measured` (provider-reported usage or metered compute) and `external_charge` (a third-party invoice line reported by a tool adapter) are stored separately in `usage_records.basis`. Dashboards show them separately; enforcement uses the best available basis per dimension and the budget record says which.
 
@@ -319,34 +319,34 @@ Model: [`domain-model.md`](domain-model.md#5-logical-schema-illustrative-ddl) (`
 
 Humans are principals, may hold claims, and use the same transitions as agents, so intervention cannot corrupt ownership or execution state.
 
-| Action | Mechanism | What it guarantees | What it does not |
-| --- | --- | --- | --- |
-| **Message an agent or task channel** | normal or `urgent` delivery | Delivered; steered in at the next safe point (≤ ~1 s for `urgent` via the control watcher) | That the model acts on it |
-| **Pause goal** | `goal.pause` → `hold` | No new claims (sub-second). Holders receive `control: pause`; those that do not release within `pause_grace` have their lease revoked (T8) | That an effect already dispatched stops |
-| **Cancel task/goal** | T18, claims revoked with fence bump | Stale holder can never commit; gateway rejects its invocations at the next check | Rollback of anything it did |
-| **Take over** | `task.revoke` then `assign human` (T8, T6 with fence + 1) | Agent writes rejected immediately; the human's writes are fenced the same way | Anything the agent's sandbox did |
-| **Edit plan** | `plan.change` as a human principal (accepted immediately) | Atomic graph edit with budget check | — |
-| **Approve / reject** | approval decision | Single use, bound to args, expiring | — |
-| **Suspend / delete agent** | operator route → execution provider | Process frozen (suspend) or destroyed (delete); leases revoked; token invalid | That the provider acts instantly; external effects already made |
-| **Revoke capability / grant** | revoke row | Next authorization decision (≤ 5 s) | Effects in flight |
-| **Freeze swarm** | server mode `frozen` | Gateway denies everything, scheduler stops, no wakes, no claims; reads still work | Running sandboxes keep running |
-| **Revoke egress** | delete the actor's egress policy (Substrate API) | The sandbox loses its network; the one control that works against a sandbox ignoring Folie | Immediate effect (Substrate propagation) |
+| Action                               | Mechanism                                                 | What it guarantees                                                                                                                         | What it does not                                                |
+| ------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| **Message an agent or task channel** | normal or `urgent` delivery                               | Delivered; steered in at the next safe point (≤ ~1 s for `urgent` via the control watcher)                                                 | That the model acts on it                                       |
+| **Pause goal**                       | `goal.pause` → `hold`                                     | No new claims (sub-second). Holders receive `control: pause`; those that do not release within `pause_grace` have their lease revoked (T8) | That an effect already dispatched stops                         |
+| **Cancel task/goal**                 | T18, claims revoked with fence bump                       | Stale holder can never commit; gateway rejects its invocations at the next check                                                           | Rollback of anything it did                                     |
+| **Take over**                        | `task.revoke` then `assign human` (T8, T6 with fence + 1) | Agent writes rejected immediately; the human's writes are fenced the same way                                                              | Anything the agent's sandbox did                                |
+| **Edit plan**                        | `plan.change` as a human principal (accepted immediately) | Atomic graph edit with budget check                                                                                                        | —                                                               |
+| **Approve / reject**                 | approval decision                                         | Single use, bound to args, expiring                                                                                                        | —                                                               |
+| **Suspend / delete agent**           | operator route → execution provider                       | Process frozen (suspend) or destroyed (delete); leases revoked; token invalid                                                              | That the provider acts instantly; external effects already made |
+| **Revoke capability / grant**        | revoke row                                                | Next authorization decision (≤ 5 s)                                                                                                        | Effects in flight                                               |
+| **Freeze swarm**                     | server mode `frozen`                                      | Gateway denies everything, scheduler stops, no wakes, no claims; reads still work                                                          | Running sandboxes keep running                                  |
+| **Revoke egress**                    | delete the actor's egress policy (Substrate API)          | The sandbox loses its network; the one control that works against a sandbox ignoring Folie                                                 | Immediate effect (Substrate propagation)                        |
 
-**What a kill switch guarantees.** Stopping folie-server stops *new authorized* effects, new claims and wakes. It does **not** terminate a running sandbox process, cut full-trust egress, recall a dispatched call, or reverse an external effect. The mechanisms that act on a running sandbox are execution-provider `suspend`/`terminate` and egress revocation, each with a latency and a failure mode ([§14](#14-execution-lifecycle-loss-and-reconciliation)).
+**What a kill switch guarantees.** Stopping folie-server stops _new authorized_ effects, new claims and wakes. It does **not** terminate a running sandbox process, cut full-trust egress, recall a dispatched call, or reverse an external effect. The mechanisms that act on a running sandbox are execution-provider `suspend`/`terminate` and egress revocation, each with a latency and a failure mode ([§14](#14-execution-lifecycle-loss-and-reconciliation)).
 
 ## 14. Execution lifecycle, loss and reconciliation
 
 The **reconciler** (leader-only) compares three sets every pass: desired (agents needing an execution: unread deliveries, assigned tasks), recorded (`executions`), and actual (`provider.list()`; today there is no `ListTasks` call, D8).
 
-| Observation | Action |
-| --- | --- |
-| Desired, none recorded or `terminated` | `provider.ensure` (create), grant egress per trust profile, mint token, retrace deliveries, `resume`. New `executions` row; `epoch` 1. |
-| Desired, `suspended` | Grant egress (idempotent), `resume`; `epoch + 1`. |
+| Observation                                              | Action                                                                                                                                                                                                                                                    |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desired, none recorded or `terminated`                   | `provider.ensure` (create), grant egress per trust profile, mint token, retrace deliveries, `resume`. New `executions` row; `epoch` 1.                                                                                                                    |
+| Desired, `suspended`                                     | Grant egress (idempotent), `resume`; `epoch + 1`.                                                                                                                                                                                                         |
 | Recorded `running`, provider reports missing or `Failed` | Mark `lost` / `failed`. **Immediately** revoke the agent's leases (T8, `execution_lost`), mark its running session `abandoned` (returning leased deliveries), leave `dispatched` invocations `unknown` for reconciliation. Do not wait for the lease TTL. |
-| Provider has an execution, no row | Orphan. Alert; terminate after `orphan_grace` (default 10 min) unless an operator adopts it. |
-| Provider phase transitional | Look again next pass (as today). |
-| Quiet `running` agent | `suspend` after `suspend_after` (as today). |
-| Long-quiet `suspended` agent | Retire the *execution* after `delete_after`: requires `workspace.archived` when the agent's `workspace_policy` is `archive`; `scratch` (the default) retires without it. The agent identity stays `active`. |
+| Provider has an execution, no row                        | Orphan. Alert; terminate after `orphan_grace` (default 10 min) unless an operator adopts it.                                                                                                                                                              |
+| Provider phase transitional                              | Look again next pass (as today).                                                                                                                                                                                                                          |
+| Quiet `running` agent                                    | `suspend` after `suspend_after` (as today).                                                                                                                                                                                                               |
+| Long-quiet `suspended` agent                             | Retire the _execution_ after `delete_after`: requires `workspace.archived` when the agent's `workspace_policy` is `archive`; `scratch` (the default) retires without it. The agent identity stays `active`.                                               |
 
 **Recovery of a lost execution.** A new execution starts with the workspace restored from the latest provider checkpoint if one exists, else the last archive, else empty; the restore source is recorded (`workspaces.restored_from`) and an empty restore emits `workspace.memory_lost`. The agent's identity, memory service entries, claims and deliveries are untouched. The next session's context pack says the workspace was restored from an older state.
 
@@ -374,27 +374,27 @@ New agents are ordinary principals with their own token, budget and grants (a su
 
 **Stall and loop detectors** (deterministic; thresholds are goal-level policy, defaults shown):
 
-| Signal | Default | Action |
-| --- | --- | --- |
-| Lease active, heartbeat `progress` counter unchanged | 15 min | `task.stalled` event, `system_notice` to holder and owner |
-| Stalled and still unchanged | 60 min | Revoke lease (T8, `stalled`) |
-| Same tool + same canonical args repeated | 8 consecutive | `loop_suspected` event, `control: stop` after 16 |
-| Spend with no new artifact or verification result | 25 % of task budget | `task.burning` event, notice; at 60 % pause the task |
-| Goal: no task reached `verified` in the window while spend exceeds the window's pace | 24 h or 20 % of goal budget | `goal.stalled` event; owner and operators notified; policy may auto-pause |
-| Message ping-pong (≥ 20 messages between two agents on a channel with no artifact or state change) | 20 | notice to both and the goal owner; channel rate-limited |
+| Signal                                                                                             | Default                     | Action                                                                    |
+| -------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------- |
+| Lease active, heartbeat `progress` counter unchanged                                               | 15 min                      | `task.stalled` event, `system_notice` to holder and owner                 |
+| Stalled and still unchanged                                                                        | 60 min                      | Revoke lease (T8, `stalled`)                                              |
+| Same tool + same canonical args repeated                                                           | 8 consecutive               | `loop_suspected` event, `control: stop` after 16                          |
+| Spend with no new artifact or verification result                                                  | 25 % of task budget         | `task.burning` event, notice; at 60 % pause the task                      |
+| Goal: no task reached `verified` in the window while spend exceeds the window's pace               | 24 h or 20 % of goal budget | `goal.stalled` event; owner and operators notified; policy may auto-pause |
+| Message ping-pong (≥ 20 messages between two agents on a channel with no artifact or state change) | 20                          | notice to both and the goal owner; channel rate-limited                   |
 
 An optional LLM reviewer may judge "meaningful progress" for operators, but no action depends on it.
 
 **Runaway task-generation limits** (per goal; `quota_exceeded` when hit; raising them is an owner or human decision):
 
-| Limit | Default |
-| --- | --- |
-| Max task depth | 4 |
-| Max children per parent | 8 |
-| Frontier WIP: non-terminal, unverified tasks per goal | 32 |
-| Total tasks per goal | 500 |
-| Proposals per agent per hour | 20 |
-| Dedup | `dedup_key` unique index plus similarity warning; similar-above-threshold proposals need acceptance by the owner even under `auto` |
-| Budget | A proposal that needs a carve-out the parent cannot give is rejected |
+| Limit                                                 | Default                                                                                                                            |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Max task depth                                        | 4                                                                                                                                  |
+| Max children per parent                               | 8                                                                                                                                  |
+| Frontier WIP: non-terminal, unverified tasks per goal | 32                                                                                                                                 |
+| Total tasks per goal                                  | 500                                                                                                                                |
+| Proposals per agent per hour                          | 20                                                                                                                                 |
+| Dedup                                                 | `dedup_key` unique index plus similarity warning; similar-above-threshold proposals need acceptance by the owner even under `auto` |
+| Budget                                                | A proposal that needs a carve-out the parent cannot give is rejected                                                               |
 
 **Endless recursion** is closed by three independent mechanisms: depth cap, budget monotonically shrinking down the tree (a child's budget is a share of its parent's), and the frontier WIP cap, which forces agents to finish and verify work before generating more.

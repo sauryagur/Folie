@@ -45,7 +45,14 @@ export interface App {
   stop(): void;
 }
 
-const COLORS = { fg: "#d8dee9", dim: "#7b88a1", accent: "#88c0d0", bad: "#bf616a", good: "#a3be8c", selected: "#3b4252" };
+const COLORS = {
+  fg: "#d8dee9",
+  dim: "#7b88a1",
+  accent: "#88c0d0",
+  bad: "#bf616a",
+  good: "#a3be8c",
+  selected: "#3b4252",
+};
 
 export function createApp(renderer: CliRenderer, deps: AppDeps): App {
   const now = deps.now ?? Date.now;
@@ -54,12 +61,36 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
   // Programmatic updates to the fleet list fire selection events; those must not be read as the user moving.
   let syncing = false;
 
-  const layout = new BoxRenderable(renderer, { flexDirection: "column", width: "100%", height: "100%" });
-  const header = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, fg: COLORS.accent });
-  const body = new BoxRenderable(renderer, { flexDirection: "row", flexGrow: 1, minHeight: 0 });
+  const layout = new BoxRenderable(renderer, {
+    flexDirection: "column",
+    width: "100%",
+    height: "100%",
+  });
+  const header = new TextRenderable(renderer, {
+    content: "",
+    height: 1,
+    flexShrink: 0,
+    fg: COLORS.accent,
+  });
+  const body = new BoxRenderable(renderer, {
+    flexDirection: "row",
+    flexGrow: 1,
+    minHeight: 0,
+  });
 
-  const fleetBox = new BoxRenderable(renderer, { width: 40, flexShrink: 0, borderStyle: "single", title: "fleet", flexDirection: "column" });
-  const fleetHeader = new TextRenderable(renderer, { content: fleetHeaderText([]), height: 1, flexShrink: 0, fg: COLORS.dim });
+  const fleetBox = new BoxRenderable(renderer, {
+    width: 40,
+    flexShrink: 0,
+    borderStyle: "single",
+    title: "fleet",
+    flexDirection: "column",
+  });
+  const fleetHeader = new TextRenderable(renderer, {
+    content: fleetHeaderText([]),
+    height: 1,
+    flexShrink: 0,
+    fg: COLORS.dim,
+  });
   const fleet = new SelectRenderable(renderer, {
     options: [],
     showDescription: false,
@@ -70,12 +101,35 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
     focusedBackgroundColor: "transparent",
   });
 
-  const paneBox = new BoxRenderable(renderer, { flexGrow: 1, minWidth: 0, borderStyle: "single", title: paneTitle(state) });
-  const scroll = new ScrollBoxRenderable(renderer, { flexGrow: 1, minHeight: 0, stickyScroll: true, stickyStart: "bottom" });
-  const pane = new TextRenderable(renderer, { content: "", fg: COLORS.fg, wrapMode: "word" });
+  const paneBox = new BoxRenderable(renderer, {
+    flexGrow: 1,
+    minWidth: 0,
+    borderStyle: "single",
+    title: paneTitle(state),
+  });
+  const scroll = new ScrollBoxRenderable(renderer, {
+    flexGrow: 1,
+    minHeight: 0,
+    stickyScroll: true,
+    stickyStart: "bottom",
+  });
+  const pane = new TextRenderable(renderer, {
+    content: "",
+    fg: COLORS.fg,
+    wrapMode: "word",
+  });
 
-  const status = new TextRenderable(renderer, { content: "", height: 1, flexShrink: 0, fg: COLORS.dim });
-  const input = new InputRenderable(renderer, { placeholder: "type a command (help), or just: submit <goal>", flexShrink: 0, width: "100%" });
+  const status = new TextRenderable(renderer, {
+    content: "",
+    height: 1,
+    flexShrink: 0,
+    fg: COLORS.dim,
+  });
+  const input = new InputRenderable(renderer, {
+    placeholder: "type a command (help), or just: submit <goal>",
+    flexShrink: 0,
+    width: "100%",
+  });
 
   fleetBox.add(fleetHeader);
   fleetBox.add(fleet);
@@ -91,13 +145,19 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
   fleet.focus();
 
   function draw() {
-    const views = VIEWS.map((v, i) => (v === state.view ? `[${i + 1}:${v}]` : ` ${i + 1}:${v} `)).join(" ");
+    const views = VIEWS.map((v, i) =>
+      v === state.view ? `[${i + 1}:${v}]` : ` ${i + 1}:${v} `,
+    ).join(" ");
     header.content = ` folie   ${views}   ${state.connected ? "● connected" : "○ offline"}`;
 
     const rows = fleetRows(state.agents, now());
     fleetHeader.content = fleetHeaderText(state.agents);
     syncing = true;
-    fleet.options = rows.map((r) => ({ name: r.line, description: "", value: r.name }));
+    fleet.options = rows.map((r) => ({
+      name: r.line,
+      description: "",
+      value: r.name,
+    }));
     const at = rows.findIndex((r) => r.name === state.selected);
     if (at >= 0) fleet.setSelectedIndex(at);
     syncing = false;
@@ -153,11 +213,14 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
     await refresh();
   }
 
-  fleet.on(SelectRenderableEvents.SELECTION_CHANGED, (_i: number, option: { value?: unknown } | null) => {
-    if (syncing || !option || typeof option.value !== "string") return;
-    state = select(state, option.value);
-    void refresh();
-  });
+  fleet.on(
+    SelectRenderableEvents.SELECTION_CHANGED,
+    (_i: number, option: { value?: unknown } | null) => {
+      if (syncing || !option || typeof option.value !== "string") return;
+      state = select(state, option.value);
+      void refresh();
+    },
+  );
 
   input.on(InputRenderableEvents.ENTER, (value: string) => {
     input.value = "";
@@ -198,7 +261,10 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
         return focusInput(true);
       case "s":
       case "r":
-        if (state.selected) void runCommand(`${key.name === "s" ? "suspend" : "resume"} ${state.selected}`);
+        if (state.selected)
+          void runCommand(
+            `${key.name === "s" ? "suspend" : "resume"} ${state.selected}`,
+          );
         return;
     }
     if (key.sequence === ":" || key.sequence === "/") {
@@ -206,7 +272,8 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
       return focusInput(true);
     }
     const n = Number(key.sequence);
-    if (Number.isInteger(n) && n >= 1 && n <= VIEWS.length) showView(VIEWS[n - 1]!);
+    if (Number.isInteger(n) && n >= 1 && n <= VIEWS.length)
+      showView(VIEWS[n - 1]!);
   });
 
   const timer = setInterval(() => void refresh(), deps.intervalMs ?? 1000);

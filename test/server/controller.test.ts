@@ -21,11 +21,25 @@ class FakeAgents {
   idleByState = new Map<string, string[]>();
   idleQueries: [string, number][] = [];
   states = new Map<string, string>();
-  traces = new Map<string, { traceparent: string | null; tracestate: string | null }>();
-  wakeDemand = async () => this.unread.map((name) => ({ name, ...(this.traces.get(name) ?? { traceparent: null, tracestate: null }) }));
-  retrace: (name: string, t: { traceparent: string | null; tracestate: string | null }) => Promise<void> = async () => {};
-  idle = async (state: string, seconds: number) => (this.idleQueries.push([state, seconds]), this.idleByState.get(state) ?? []);
-  setState = async (name: string, state: string) => void this.states.set(name, state);
+  traces = new Map<
+    string,
+    { traceparent: string | null; tracestate: string | null }
+  >();
+  wakeDemand = async () =>
+    this.unread.map((name) => ({
+      name,
+      ...(this.traces.get(name) ?? { traceparent: null, tracestate: null }),
+    }));
+  retrace: (
+    name: string,
+    t: { traceparent: string | null; tracestate: string | null },
+  ) => Promise<void> = async () => {};
+  idle = async (state: string, seconds: number) => (
+    this.idleQueries.push([state, seconds]),
+    this.idleByState.get(state) ?? []
+  );
+  setState = async (name: string, state: string) =>
+    void this.states.set(name, state);
   touched: string[] = [];
   touch = async (name: string) => void this.touched.push(name);
 }
@@ -48,7 +62,15 @@ async function taskIn(name: string, phase: string) {
 }
 
 function mkSpec(key: string): ExecutionSpec {
-  return { key, namespace: "folie", image: "i", command: [], env: {}, workspace: { ref: `${key}-ws` }, network: { profile: "full-trust" } };
+  return {
+    key,
+    namespace: "folie",
+    image: "i",
+    command: [],
+    env: {},
+    workspace: { ref: `${key}-ws` },
+    network: { profile: "full-trust" },
+  };
 }
 
 describe("wake demand", () => {
@@ -57,11 +79,20 @@ describe("wake demand", () => {
     await controller.reconcileOnce();
 
     // Egress must land before resume: a sandbox that starts first has no DNS and never reaches the server.
-    expect(ax.calls).toEqual(["workspace agent-1-ws", "create agent-1", "egress folie/agent-1", "resume agent-1"]);
+    expect(ax.calls).toEqual([
+      "workspace agent-1-ws",
+      "create agent-1",
+      "egress folie/agent-1",
+      "resume agent-1",
+    ]);
     const { spec, phase } = ax.tasks.get("folie/agent-1")!;
     expect(phase).toBe("Running");
     expect(spec).toMatchObject({ image: cfg.image, command: cfg.command });
-    expect(spec.env).toEqual({ FOLIE_SERVER_URL: "http://server", ANTHROPIC_API_KEY: "k", FOLIE_AGENT: "agent-1" });
+    expect(spec.env).toEqual({
+      FOLIE_SERVER_URL: "http://server",
+      ANTHROPIC_API_KEY: "k",
+      FOLIE_AGENT: "agent-1",
+    });
     expect(agents.states.get("agent-1")).toBe("running");
   });
 
@@ -80,7 +111,9 @@ describe("wake demand", () => {
   it("binds a durable workspace so task recreation never destroys agent files", async () => {
     agents.unread = ["agent-1"];
     await controller.reconcileOnce();
-    expect(ax.tasks.get("folie/agent-1")!.spec.workspace).toEqual({ ref: "agent-1-ws" });
+    expect(ax.tasks.get("folie/agent-1")!.spec.workspace).toEqual({
+      ref: "agent-1-ws",
+    });
   });
 
   it("resumes a suspended execution without recreating it (memory lives in its workspace)", async () => {
@@ -115,12 +148,15 @@ describe("wake demand", () => {
     expect(ax.calls).toEqual([]);
   });
 
-  it.each(["Failed", "Terminating"])("does not wake an execution in phase %s", async (phase) => {
-    await taskIn("a", phase);
-    agents.unread = ["a"];
-    await controller.reconcileOnce();
-    expect(ax.calls).toEqual([]);
-  });
+  it.each(["Failed", "Terminating"])(
+    "does not wake an execution in phase %s",
+    async (phase) => {
+      await taskIn("a", phase);
+      agents.unread = ["a"];
+      await controller.reconcileOnce();
+      expect(ax.calls).toEqual([]);
+    },
+  );
 
   it("keeps waking the others when one agent fails", async () => {
     ax.failFor.add("bad");
@@ -133,7 +169,12 @@ describe("wake demand", () => {
 
   it("scopes executions and grants to the configured namespace", async () => {
     agents.unread = ["a"];
-    await new Controller(ax, agents, { ...cfg, namespace: "other" }, silent).reconcileOnce();
+    await new Controller(
+      ax,
+      agents,
+      { ...cfg, namespace: "other" },
+      silent,
+    ).reconcileOnce();
     expect([...ax.tasks.keys()]).toEqual(["other/a"]);
     expect(ax.calls).toContain("egress other/a");
   });
@@ -192,7 +233,10 @@ describe("idle sweep: suspend", () => {
 describe("operator ops", () => {
   it("suspend checkpoints a running agent and records it", async () => {
     await taskIn("a", "Running");
-    expect(await controller.run("suspend", "a")).toEqual({ agent: "a", state: "suspended" });
+    expect(await controller.run("suspend", "a")).toEqual({
+      agent: "a",
+      state: "suspended",
+    });
     expect(ax.calls).toEqual(["suspend a"]);
     expect(agents.states.get("a")).toBe("suspended");
   });
@@ -205,27 +249,42 @@ describe("operator ops", () => {
   });
 
   it("suspend refuses an agent with no execution (404) or one in some other phase (400)", async () => {
-    await expect(controller.run("suspend", "ghost")).rejects.toBeInstanceOf(NotFoundError);
+    await expect(controller.run("suspend", "ghost")).rejects.toBeInstanceOf(
+      NotFoundError,
+    );
     await taskIn("a", "Failed");
-    await expect(controller.run("suspend", "a")).rejects.toBeInstanceOf(ValidationError);
+    await expect(controller.run("suspend", "a")).rejects.toBeInstanceOf(
+      ValidationError,
+    );
     expect(ax.calls).toEqual([]);
   });
 
   it("resume restarts the quiet period, grants egress and resumes, even with no mail", async () => {
     await taskIn("a", "Suspended");
-    expect(await controller.run("resume", "a")).toEqual({ agent: "a", state: "running" });
+    expect(await controller.run("resume", "a")).toEqual({
+      agent: "a",
+      state: "running",
+    });
     expect(agents.touched).toEqual(["a"]);
     expect(ax.calls).toEqual(["egress folie/a", "resume a"]);
   });
 
   it("resume creates the execution for an agent that has none", async () => {
     await controller.run("resume", "fresh");
-    expect(ax.calls).toEqual(["workspace fresh-ws", "create fresh", "egress folie/fresh", "resume fresh"]);
+    expect(ax.calls).toEqual([
+      "workspace fresh-ws",
+      "create fresh",
+      "egress folie/fresh",
+      "resume fresh",
+    ]);
   });
 
   it("delete is the kill switch: it destroys even a running execution", async () => {
     await taskIn("a", "Running");
-    expect(await controller.run("delete", "a")).toEqual({ agent: "a", state: "retired" });
+    expect(await controller.run("delete", "a")).toEqual({
+      agent: "a",
+      state: "retired",
+    });
     expect(ax.calls).toEqual(["delete a"]);
     expect(ax.tasks.has("folie/a")).toBe(false);
     expect(agents.states.get("a")).toBe("retired");
@@ -238,7 +297,9 @@ describe("operator ops", () => {
   });
 
   it("rejects a malformed agent name before touching the provider", async () => {
-    await expect(controller.run("delete", "Bad Name")).rejects.toBeInstanceOf(ValidationError);
+    await expect(controller.run("delete", "Bad Name")).rejects.toBeInstanceOf(
+      ValidationError,
+    );
     expect(ax.calls).toEqual([]);
   });
 });
@@ -278,7 +339,12 @@ describe("idle sweep: retire", () => {
 
     agents.unread = ["a"];
     await controller.reconcileOnce();
-    expect(ax.calls).toEqual(["workspace a-ws", "create a", "egress folie/a", "resume a"]);
+    expect(ax.calls).toEqual([
+      "workspace a-ws",
+      "create a",
+      "egress folie/a",
+      "resume a",
+    ]);
   });
 
   it("keeps sweeping the others when one deletion fails", async () => {
@@ -286,7 +352,10 @@ describe("idle sweep: retire", () => {
     await taskIn("good", "Suspended");
     agents.idleByState.set("suspended", ["bad", "good"]);
     const del = ax.terminate.bind(ax);
-    ax.terminate = async (ref, o) => (ref.key === "bad" ? Promise.reject(new Error("provider down")) : del(ref, o));
+    ax.terminate = async (ref, o) =>
+      ref.key === "bad"
+        ? Promise.reject(new Error("provider down"))
+        : del(ref, o);
     await controller.reconcileOnce();
     expect(agents.states.get("good")).toBe("retired");
     expect(agents.states.has("bad")).toBe(false);
@@ -308,8 +377,12 @@ describe("wake tracing", () => {
     agents.traces.set("traced-1", { traceparent, tracestate });
     await traced().reconcileOnce();
 
-    const wake = mem.named("folie.controller.wake").find((s) => s.attributes.agent_name === "traced-1")!;
-    const init = mem.named("folie.sandbox.init").find((s) => s.attributes.agent_name === "traced-1")!;
+    const wake = mem
+      .named("folie.controller.wake")
+      .find((s) => s.attributes.agent_name === "traced-1")!;
+    const init = mem
+      .named("folie.sandbox.init")
+      .find((s) => s.attributes.agent_name === "traced-1")!;
     expect(wake.parentSpanContext?.spanId).toBe(span.spanContext().spanId);
     expect(wake.spanContext().traceId).toBe(span.spanContext().traceId);
     expect(init.parentSpanContext?.spanId).toBe(wake.spanContext().spanId);
@@ -325,8 +398,14 @@ describe("wake tracing", () => {
     };
     await traced().reconcileOnce();
 
-    expect(callsAtRetrace).toEqual(["workspace traced-2-ws", "create traced-2", "egress folie/traced-2"]); // resume has not happened yet
-    const init = mem.named("folie.sandbox.init").find((s) => s.attributes.agent_name === "traced-2")!;
+    expect(callsAtRetrace).toEqual([
+      "workspace traced-2-ws",
+      "create traced-2",
+      "egress folie/traced-2",
+    ]); // resume has not happened yet
+    const init = mem
+      .named("folie.sandbox.init")
+      .find((s) => s.attributes.agent_name === "traced-2")!;
     expect(retracedTo).toContain(init.spanContext().spanId);
   });
 
@@ -336,7 +415,11 @@ describe("wake tracing", () => {
     await traced().reconcileOnce();
     await traced().reconcileOnce();
 
-    expect(mem.named("folie.controller.wake").filter((s) => s.attributes.agent_name === "busy")).toEqual([]);
+    expect(
+      mem
+        .named("folie.controller.wake")
+        .filter((s) => s.attributes.agent_name === "busy"),
+    ).toEqual([]);
     expect(ax.calls).toEqual([]);
   });
 
@@ -347,7 +430,9 @@ describe("wake tracing", () => {
     };
     await traced().reconcileOnce();
 
-    const wake = mem.named("folie.controller.wake").find((s) => s.attributes.agent_name === "broken")!;
+    const wake = mem
+      .named("folie.controller.wake")
+      .find((s) => s.attributes.agent_name === "broken")!;
     expect(wake.status).toMatchObject({ code: 2, message: "ax unavailable" });
   });
 });

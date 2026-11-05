@@ -31,19 +31,45 @@ export interface ClusterOptions {
   operatorToken?: string;
 }
 
-export async function startCluster({ obs, maxAgents = 2, gateway = otlpGateway(undefined), operatorToken = "test-operator-token" }: ClusterOptions = {}) {
+export async function startCluster({
+  obs,
+  maxAgents = 2,
+  gateway = otlpGateway(undefined),
+  operatorToken = "test-operator-token",
+}: ClusterOptions = {}) {
   const { db, store, reset } = await testStore();
   await store.auth.setOperatorToken(operatorToken);
   const service = new SwarmService(store, obs);
   const build = () => {
     const ax = new FakeAx();
-    return { ax, controller: new Controller(ax, store.agents, CLUSTER_CONFIG, silent, obs, store.auth) };
+    return {
+      ax,
+      controller: new Controller(
+        ax,
+        store.agents,
+        CLUSTER_CONFIG,
+        silent,
+        obs,
+        store.auth,
+      ),
+    };
   };
   let current = build();
-  const server = httpServer(service, { run: (op, agent) => current.controller.run(op, agent) }, gateway, obs, store, operatorToken).listen(0);
+  const server = httpServer(
+    service,
+    { run: (op, agent) => current.controller.run(op, agent) },
+    gateway,
+    obs,
+    store,
+    operatorToken,
+  ).listen(0);
   await new Promise((r) => server.once("listening", r));
   const port = (server.address() as AddressInfo).port;
-  const client = new FolieClient(`http://127.0.0.1:${port}`, fetch, operatorToken);
+  const client = new FolieClient(
+    `http://127.0.0.1:${port}`,
+    fetch,
+    operatorToken,
+  );
 
   // Helper to mint an agent token for a freshly-created execution (mirrors controller).
   async function agentClientFor(name: string): Promise<FolieClient> {
@@ -76,7 +102,10 @@ export async function startCluster({ obs, maxAgents = 2, gateway = otlpGateway(u
       await current.controller.reconcileOnce();
     },
     /** Plays the cluster: every task the controller has made runs its agent loop once. */
-    async runAgents(runtimeFor: (name: string) => Runtime, deps: LoopDeps = {}) {
+    async runAgents(
+      runtimeFor: (name: string) => Runtime,
+      deps: LoopDeps = {},
+    ) {
       for (const { spec, phase } of current.ax.tasks.values()) {
         if (phase !== "Running") continue;
         // Agents authenticate with their execution token (minted by the controller at task create).
@@ -84,9 +113,14 @@ export async function startCluster({ obs, maxAgents = 2, gateway = otlpGateway(u
         let agentClient: FolieClient;
         try {
           // Find the token for this agent by querying executions? The controller minted it and stored the hash; we minted a fresh one here for tests? No - we must reuse the token the controller minted, which is in the task env. FakeAx stores spec.env; extract FOLIE_AGENT_TOKEN.
-          const rawToken = (spec as any).env?.FOLIE_AGENT_TOKEN as string | undefined;
+          const rawToken = (spec as any).env?.FOLIE_AGENT_TOKEN as
+            string | undefined;
           if (rawToken) {
-            agentClient = new FolieClient(`http://127.0.0.1:${port}`, fetch, rawToken);
+            agentClient = new FolieClient(
+              `http://127.0.0.1:${port}`,
+              fetch,
+              rawToken,
+            );
           } else {
             agentClient = await agentClientFor(spec.key);
           }
@@ -98,11 +132,17 @@ export async function startCluster({ obs, maxAgents = 2, gateway = otlpGateway(u
         if ((runtime as any).d?.server) {
           (runtime as any).d.server = agentClient;
         }
-        await new AgentLoop(spec.key, agentClient, runtime, { out: captureSink(), ...deps }).tick();
+        await new AgentLoop(spec.key, agentClient, runtime, {
+          out: captureSink(),
+          ...deps,
+        }).tick();
       }
     },
     age: (name: string, seconds: number) =>
-      db.query("UPDATE agents SET last_active_at = now() - make_interval(secs => $2) WHERE name = $1", [name, seconds]),
+      db.query(
+        "UPDATE agents SET last_active_at = now() - make_interval(secs => $2) WHERE name = $1",
+        [name, seconds],
+      ),
     async close() {
       server.close();
       await db.close();

@@ -13,7 +13,8 @@ let reset: () => Promise<void>;
 const mem = memoryTelemetry();
 let service: SwarmService;
 const op = { kind: "operator", name: "operator" } as const;
-const asAgent = (name: string) => ({ kind: "agent", name, generation: 1, executionId: "test-exec" }) as const;
+const asAgent = (name: string) =>
+  ({ kind: "agent", name, generation: 1, executionId: "test-exec" }) as const;
 
 beforeAll(async () => {
   ({ db, store, reset } = await testStore());
@@ -30,22 +31,49 @@ describe("cancellation", () => {
     expect(empty).toMatchObject({ actions: [] });
     // Queue a cancel via the operator kill path.
     await service.queueCancel({ agent: "a", reason: "operator" }, op);
-    const got = await service.control("a", { after: empty.cursor }, asAgent("a"));
+    const got = await service.control(
+      "a",
+      { after: empty.cursor },
+      asAgent("a"),
+    );
     expect(got.actions).toEqual([expect.objectContaining({ type: "cancel" })]);
     expect(got.cursor).toBeGreaterThan(empty.cursor);
     // Resume from the delivered cursor: the signal is not redelivered.
-    const again = await service.control("a", { after: got.cursor }, asAgent("a"));
+    const again = await service.control(
+      "a",
+      { after: got.cursor },
+      asAgent("a"),
+    );
     expect(again.actions).toEqual([]);
   });
 
   it("rejects control reads by another agent and settles cancelled with partial usage", async () => {
     await service.registerAgent("a");
     await service.registerAgent("b");
-    await expect(service.control("a", { after: 0 }, asAgent("b"))).rejects.toThrowError();
+    await expect(
+      service.control("a", { after: 0 }, asAgent("b")),
+    ).rejects.toThrowError();
     const m = await store.messages.send({ from: "human", to: "a", body: "hi" });
-    const s = await service.startSession({ agent: "a", messageIds: [m.id] }, asAgent("a"));
+    const s = await service.startSession(
+      { agent: "a", messageIds: [m.id] },
+      asAgent("a"),
+    );
     const r = await service.submitReport(
-      { agent: "a", sessionId: s.sessionId, startedAt: new Date().toISOString(), outcome: "failed", summary: "cancelled by operator", messageIds: [m.id], usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.001, toolCalls: 1, toolFailures: 0 } },
+      {
+        agent: "a",
+        sessionId: s.sessionId,
+        startedAt: new Date().toISOString(),
+        outcome: "failed",
+        summary: "cancelled by operator",
+        messageIds: [m.id],
+        usage: {
+          promptTokens: 10,
+          completionTokens: 5,
+          costUsd: 0.001,
+          toolCalls: 1,
+          toolFailures: 0,
+        },
+      },
       asAgent("a"),
     );
     expect(r.outcome).toBe("failed");

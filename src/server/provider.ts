@@ -26,7 +26,8 @@ export interface ProviderRef {
   namespace: string;
 }
 
-export type ExecutionPhase = "provisioning" | "running" | "suspended" | "failed" | "absent" | "unknown";
+export type ExecutionPhase =
+  "provisioning" | "running" | "suspended" | "failed" | "absent" | "unknown";
 
 export interface ExecutionState {
   ref: ProviderRef;

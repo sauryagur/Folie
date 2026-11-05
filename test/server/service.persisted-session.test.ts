@@ -12,7 +12,8 @@ let store: Store;
 let reset: () => Promise<void>;
 const mem = memoryTelemetry();
 let service: SwarmService;
-const asAgent = (name: string) => ({ kind: "agent", name, generation: 1, executionId: "test-exec" }) as const;
+const asAgent = (name: string) =>
+  ({ kind: "agent", name, generation: 1, executionId: "test-exec" }) as const;
 
 beforeAll(async () => {
   ({ db, store, reset } = await testStore());
@@ -28,10 +29,21 @@ describe("persisted sessions", () => {
 
     // Events before a server-owned session exists are rejected.
     await expect(
-      service.ingestEvents({ agent: "a", sessionId: "99", scope: "mail:1", events: [{ seq: 0, type: "message", data: {} }] }, asAgent("a")),
+      service.ingestEvents(
+        {
+          agent: "a",
+          sessionId: "99",
+          scope: "mail:1",
+          events: [{ seq: 0, type: "message", data: {} }],
+        },
+        asAgent("a"),
+      ),
     ).rejects.toBeInstanceOf(ValidationError);
 
-    const s = await service.startSession({ agent: "a", messageIds: [m.id] }, asAgent("a"));
+    const s = await service.startSession(
+      { agent: "a", messageIds: [m.id] },
+      asAgent("a"),
+    );
     expect(s.sessionId).toMatch(/^\d+$/);
     expect(s.state).toBe("running");
     expect(s.agent).toBe("a");
@@ -40,16 +52,33 @@ describe("persisted sessions", () => {
     expect(await service.inbox("a", {}, asAgent("a"))).toEqual([]);
     // Events now ingest against the server-owned session.
     await expect(
-      service.ingestEvents({ agent: "a", sessionId: s.sessionId, scope: "mail:1", events: [{ seq: 0, type: "message", data: {} }] }, asAgent("a")),
+      service.ingestEvents(
+        {
+          agent: "a",
+          sessionId: s.sessionId,
+          scope: "mail:1",
+          events: [{ seq: 0, type: "message", data: {} }],
+        },
+        asAgent("a"),
+      ),
     ).resolves.toEqual({ stored: 1 });
 
     // Reporting settles the same row instead of minting a new one.
     const r = await service.submitReport(
-      { agent: "a", sessionId: s.sessionId, startedAt: new Date().toISOString(), outcome: "done", summary: "ok", messageIds: [m.id] },
+      {
+        agent: "a",
+        sessionId: s.sessionId,
+        startedAt: new Date().toISOString(),
+        outcome: "done",
+        summary: "ok",
+        messageIds: [m.id],
+      },
       asAgent("a"),
     );
     expect(r.id).toBeGreaterThan(0);
-    const rows = (await db.query("SELECT state, outcome, ended_at FROM sessions")).rows;
+    const rows = (
+      await db.query("SELECT state, outcome, ended_at FROM sessions")
+    ).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ state: "settled", outcome: "done" });
     expect(rows[0]!.ended_at).not.toBeNull();
@@ -60,10 +89,18 @@ describe("persisted sessions", () => {
     await service.registerAgent("b");
     const m = await store.messages.send({ from: "human", to: "a", body: "hi" });
 
-    await expect(service.startSession({ agent: "b", messageIds: [m.id] }, asAgent("b"))).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      service.startSession({ agent: "b", messageIds: [m.id] }, asAgent("b")),
+    ).rejects.toBeInstanceOf(ValidationError);
 
-    const s1 = await service.startSession({ agent: "a", messageIds: [m.id], clientRequestId: "req-1" }, asAgent("a"));
-    const s2 = await service.startSession({ agent: "a", messageIds: [m.id], clientRequestId: "req-1" }, asAgent("a"));
+    const s1 = await service.startSession(
+      { agent: "a", messageIds: [m.id], clientRequestId: "req-1" },
+      asAgent("a"),
+    );
+    const s2 = await service.startSession(
+      { agent: "a", messageIds: [m.id], clientRequestId: "req-1" },
+      asAgent("a"),
+    );
     expect(s2.sessionId).toBe(s1.sessionId);
   });
 });

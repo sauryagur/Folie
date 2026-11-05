@@ -2,24 +2,24 @@
 
 A general-purpose, self-organizing autonomous execution environment: humans and AI agents pursue arbitrary objectives together, discover and coordinate work, assemble teams, acquire capabilities, execute, verify outcomes, and keep persistent identities. Coding is one application, not the definition.
 
-**Status 2026-11-04.** This document is the authoritative architectural overview and **the target**. What exists today is a message-driven fleet of persistent agents (the runtime layer): see [`architecture/current-system.md`](architecture/current-system.md), the as-built reference, which also records where the previous design text disagreed with the code. Everything marked *target*, *planned* or *proposed* below is **not built**. Nothing in the repository's code was changed by this evolution.
+**Status 2026-11-04.** This document is the authoritative architectural overview and **the target**. What exists today is a message-driven fleet of persistent agents (the runtime layer): see [`architecture/current-system.md`](architecture/current-system.md), the as-built reference, which also records where the previous design text disagreed with the code. Everything marked _target_, _planned_ or _proposed_ below is **not built**. Nothing in the repository's code was changed by this evolution.
 
 **Documentation map.**
 
-| Document | Contents |
-| --- | --- |
-| `DESIGN.md` (this file) | Vision, terminology, principles, current state, target architecture, summaries of every subsystem, requirements and conformance, evaluation, deployment, risks |
-| [`architecture/current-system.md`](architecture/current-system.md) | The system as built: invariants, config, HTTP API, replay safety, observability, egress, ax and pi facts, verified discrepancies |
-| [`architecture/agents-and-execution.md`](architecture/agents-and-execution.md) | Identity, sessions, memory, context assembly, harness switching, workspace lifecycle, execution boundary |
-| [`architecture/work-and-coordination.md`](architecture/work-and-coordination.md) | Goals, tasks, communication/coordination/organization, verification subsystem |
-| [`architecture/governance-and-resources.md`](architecture/governance-and-resources.md) | Trust profiles, authority, risk, gateway, kill switch, physical world, budgets, scheduling, threat model |
-| [`architecture/integration.md`](architecture/integration.md) | Capabilities, tools, extensions |
-| [`architecture/observability-and-clients.md`](architecture/observability-and-clients.md) | OpenTelemetry, metrics, TUI and client architecture |
-| [`spec/domain-model.md`](spec/domain-model.md) | Entities, aggregates, state machines, logical schema, transactions, migration |
-| [`spec/protocols.md`](spec/protocols.md) | Authentication, messaging, claims, discovery, negotiation, teams, verification, gateway, budgets, recovery |
-| [`spec/interfaces.md`](spec/interfaces.md) | Harness, execution provider, tool/verifier/capability providers, policy, stores, extension manifest, HTTP API, tool surface |
-| [`decisions/`](decisions/README.md) | ADRs, fate of the 19 existing decisions, the twenty questions, open questions |
-| [`spec/requirements.md`](spec/requirements.md) | **The normative specification**: 96 requirements bound to tests, demonstrations, exclusions |
+| Document                                                                                 | Contents                                                                                                                                                       |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DESIGN.md` (this file)                                                                  | Vision, terminology, principles, current state, target architecture, summaries of every subsystem, requirements and conformance, evaluation, deployment, risks |
+| [`architecture/current-system.md`](architecture/current-system.md)                       | The system as built: invariants, config, HTTP API, replay safety, observability, egress, ax and pi facts, verified discrepancies                               |
+| [`architecture/agents-and-execution.md`](architecture/agents-and-execution.md)           | Identity, sessions, memory, context assembly, harness switching, workspace lifecycle, execution boundary                                                       |
+| [`architecture/work-and-coordination.md`](architecture/work-and-coordination.md)         | Goals, tasks, communication/coordination/organization, verification subsystem                                                                                  |
+| [`architecture/governance-and-resources.md`](architecture/governance-and-resources.md)   | Trust profiles, authority, risk, gateway, kill switch, physical world, budgets, scheduling, threat model                                                       |
+| [`architecture/integration.md`](architecture/integration.md)                             | Capabilities, tools, extensions                                                                                                                                |
+| [`architecture/observability-and-clients.md`](architecture/observability-and-clients.md) | OpenTelemetry, metrics, TUI and client architecture                                                                                                            |
+| [`spec/domain-model.md`](spec/domain-model.md)                                           | Entities, aggregates, state machines, logical schema, transactions, migration                                                                                  |
+| [`spec/protocols.md`](spec/protocols.md)                                                 | Authentication, messaging, claims, discovery, negotiation, teams, verification, gateway, budgets, recovery                                                     |
+| [`spec/interfaces.md`](spec/interfaces.md)                                               | Harness, execution provider, tool/verifier/capability providers, policy, stores, extension manifest, HTTP API, tool surface                                    |
+| [`decisions/`](decisions/README.md)                                                      | ADRs, fate of the 19 existing decisions, the twenty questions, open questions                                                                                  |
+| [`spec/requirements.md`](spec/requirements.md)                                           | **The normative specification**: 96 requirements bound to tests, demonstrations, exclusions                                                                    |
 
 ## 1. Vision and non-goals
 
@@ -30,7 +30,7 @@ A general-purpose, self-organizing autonomous execution environment: humans and 
 **Non-goals.**
 
 - Not a coding-agent framework, and no repository model in the core.
-- Not a fixed manager/worker or CEO hierarchy (it remains *expressible*, as an evaluation baseline).
+- Not a fixed manager/worker or CEO hierarchy (it remains _expressible_, as an evaluation baseline).
 - Not a universal verifier, a universal goal schema, or a universal planner. The runtime understands structure, never the meaning of a goal.
 - Not a distributed system before one machine demands it: no Kubernetes-native rewrite, microservices, service mesh or consensus without a measured need ([§24](#24-deployment-architecture)).
 - Not a promise of physical-world safety: physical execution needs an independent safety architecture that sits outside this system and outside any LLM ([§13](#13-security-and-governance)).
@@ -40,30 +40,30 @@ A general-purpose, self-organizing autonomous execution environment: humans and 
 
 The four primary concepts are **Swarm → Goals → Tasks → Agents**, defined independently.
 
-| Term | Definition | Is not |
-| --- | --- | --- |
-| **Swarm** | A collaborative execution environment: agents, humans, tools, resources and objectives coexist; shared channels, artifacts, policies, integrations. Rows carry `swarm_id`; one swarm (multi-swarm is excluded) | A fixed team |
-| **Goal** | A persistent objective: natural-language description, acceptance criteria, constraints and exclusions, budget, deadline, priority, references, verification requirements, approval requirements; versioned by **revisions**; can be paused, resumed, cancelled, superseded, evaluated | A task list; a flag an agent sets |
-| **Task** | A unit of work under a goal, dynamically proposed by any permitted principal, with dependencies, a verification **contract**, resource and capability requirements, and a lifecycle; held by at most one owner through a fenced **claim** | A node in a static DAG |
-| **Agent** | A persistent participant with an identity independent of process, session, harness, model, workspace and assignment; has config, capabilities, grants, limits, memory and communication endpoints | A process, container, session or model |
-| **Principal** | An authenticated acting identity: agent execution, human, system component, extension | A name taken from a request body |
-| **Message / delivery / publication** | A *publication* is the sender-side event; a *message* row is one *delivery* to one recipient's durable inbox | A socket write |
-| **Channel** | `dm`, `topic`, `goal`, `task` or `team` conversation space with history | Memory |
-| **Session** | One bounded unit of reasoning: fresh context, one scope, one settlement | An identity or a memory |
-| **Execution** | One provider-level run of the agent shim (an ax Task today) | The agent |
-| **Workspace** | Files visible at `/workspace` | Durable memory |
-| **Claim / lease / fence** | A hold on a task; its time-limited validity; the monotonic number that makes a stale holder's writes fail | A message |
-| **Team** | A scoped, temporary set of agents with a channel, budget slice and context pack | An org-chart node |
-| **Capability** | What an agent can meaningfully do, with an evidence level | A permission or a tool |
-| **Tool** | A typed interface through which an action happens (local or gateway) | A capability |
-| **Permission (grant, policy)** | What a principal is authorized to do | Something a model can assign itself |
-| **Execution provider** | Where and how a thing runs (AX today) | A domain concept |
-| **Harness** | The agent implementation inside an execution (pi today) | The agent |
-| **Artifact** | An immutable, content-addressed output with provenance | A file in a sandbox |
-| **Memory** | Scoped, immutable, provenance-bearing entries (agent, task, team, goal, swarm) | A transcript |
-| **Verification** | Independent checks against a contract | The producer's report |
-| **Ledger** | Append-only event history written in the transaction that changed state | The state store, or telemetry |
-| **Communication / coordination / organization** | Exchanging information / aligning actions and avoiding conflict / forming, changing and dissolving structures | Synonyms |
+| Term                                            | Definition                                                                                                                                                                                                                                                                            | Is not                                 |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| **Swarm**                                       | A collaborative execution environment: agents, humans, tools, resources and objectives coexist; shared channels, artifacts, policies, integrations. Rows carry `swarm_id`; one swarm (multi-swarm is excluded)                                                                        | A fixed team                           |
+| **Goal**                                        | A persistent objective: natural-language description, acceptance criteria, constraints and exclusions, budget, deadline, priority, references, verification requirements, approval requirements; versioned by **revisions**; can be paused, resumed, cancelled, superseded, evaluated | A task list; a flag an agent sets      |
+| **Task**                                        | A unit of work under a goal, dynamically proposed by any permitted principal, with dependencies, a verification **contract**, resource and capability requirements, and a lifecycle; held by at most one owner through a fenced **claim**                                             | A node in a static DAG                 |
+| **Agent**                                       | A persistent participant with an identity independent of process, session, harness, model, workspace and assignment; has config, capabilities, grants, limits, memory and communication endpoints                                                                                     | A process, container, session or model |
+| **Principal**                                   | An authenticated acting identity: agent execution, human, system component, extension                                                                                                                                                                                                 | A name taken from a request body       |
+| **Message / delivery / publication**            | A _publication_ is the sender-side event; a _message_ row is one _delivery_ to one recipient's durable inbox                                                                                                                                                                          | A socket write                         |
+| **Channel**                                     | `dm`, `topic`, `goal`, `task` or `team` conversation space with history                                                                                                                                                                                                               | Memory                                 |
+| **Session**                                     | One bounded unit of reasoning: fresh context, one scope, one settlement                                                                                                                                                                                                               | An identity or a memory                |
+| **Execution**                                   | One provider-level run of the agent shim (an ax Task today)                                                                                                                                                                                                                           | The agent                              |
+| **Workspace**                                   | Files visible at `/workspace`                                                                                                                                                                                                                                                         | Durable memory                         |
+| **Claim / lease / fence**                       | A hold on a task; its time-limited validity; the monotonic number that makes a stale holder's writes fail                                                                                                                                                                             | A message                              |
+| **Team**                                        | A scoped, temporary set of agents with a channel, budget slice and context pack                                                                                                                                                                                                       | An org-chart node                      |
+| **Capability**                                  | What an agent can meaningfully do, with an evidence level                                                                                                                                                                                                                             | A permission or a tool                 |
+| **Tool**                                        | A typed interface through which an action happens (local or gateway)                                                                                                                                                                                                                  | A capability                           |
+| **Permission (grant, policy)**                  | What a principal is authorized to do                                                                                                                                                                                                                                                  | Something a model can assign itself    |
+| **Execution provider**                          | Where and how a thing runs (AX today)                                                                                                                                                                                                                                                 | A domain concept                       |
+| **Harness**                                     | The agent implementation inside an execution (pi today)                                                                                                                                                                                                                               | The agent                              |
+| **Artifact**                                    | An immutable, content-addressed output with provenance                                                                                                                                                                                                                                | A file in a sandbox                    |
+| **Memory**                                      | Scoped, immutable, provenance-bearing entries (agent, task, team, goal, swarm)                                                                                                                                                                                                        | A transcript                           |
+| **Verification**                                | Independent checks against a contract                                                                                                                                                                                                                                                 | The producer's report                  |
+| **Ledger**                                      | Append-only event history written in the transaction that changed state                                                                                                                                                                                                               | The state store, or telemetry          |
+| **Communication / coordination / organization** | Exchanging information / aligning actions and avoiding conflict / forming, changing and dissolving structures                                                                                                                                                                         | Synonyms                               |
 
 ## 3. Architectural principles and invariants
 
@@ -77,36 +77,36 @@ The four primary concepts are **Swarm → Goals → Tasks → Agents**, defined 
 6. OTel is observability; the database and ledger are the record.
 7. Keep infrastructure replaceable (Pi, AX, Postgres, model providers); keep the system composable; avoid premature complexity.
 
-**Invariants.** Breaking one breaks the design. Items 1–5, 7–9 are **in force today**; items marked *target* are not built.
+**Invariants.** Breaking one breaks the design. Items 1–5, 7–9 are **in force today**; items marked _target_ are not built.
 
 1. **ax is only consumed, never patched.** In the target it is one `ExecutionProvider`.
 2. **folie-server is the only process with Postgres credentials.** Sandboxes reach state only through its API.
-3. **The only wake is a delivery in an inbox** (goal assignment, delegation, nomination, offer, approval result, control: all deliveries). Priority decides *whether* a suspended agent wakes (`low` does not).
+3. **The only wake is a delivery in an inbox** (goal assignment, delegation, nomination, offer, approval result, control: all deliveries). Priority decides _whether_ a suspended agent wakes (`low` does not).
 4. **A session is bounded**: fresh context, one scope, one settlement. Memory is the memory service and artifacts, not chat history.
 5. **A delivery is acked only by its session's settlement.** A dead session returns it.
-6. *(revised)* **A failed session is not retried; a task has an attempt policy.** Lease expiry and environment failures re-open the task for a new claim up to `max_attempts`; agent-reported non-retryable failure and exhausted attempts park it `failed`. Only delivery of a finished report is resent.
+6. _(revised)_ **A failed session is not retried; a task has an attempt policy.** Lease expiry and environment failures re-open the task for a new claim up to `max_attempts`; agent-reported non-retryable failure and exhausted attempts park it `failed`. Only delivery of a finished report is resent.
 7. **Side effects are journaled before they run**, tagged `replay: safe|never`, and sent with deterministic idempotency keys; no exactly-once claim outside Postgres.
 8. **Traces are not the record.** Postgres and the ledger are.
 9. **Trust is explicit and per profile.** Full trust inside the sandbox is the `dev-full-trust` profile; limits that matter live outside it.
-10. *(target)* **Identity comes from the credential, never the request.** Without this, invariants 11–14 are meaningless.
-11. *(target)* **Ownership is single and every mutation by an owner is fenced.** A stale holder's writes fail whether or not it obeys a stop message.
-12. *(target)* **Completion is a claim until verified.** `submitted`, `completed`, `verified` and `achieved` are four different facts.
-13. *(target)* **An agent can never widen its own authority, create agents outside policy, or evade a budget by delegation.** Grants delegate downward only; spawning and delegating are carve-outs.
-14. *(target)* **Every state transition appends exactly one ledger event in the same transaction.**
-15. *(target)* **Every time-dependent decision uses the database clock.**
+10. _(target)_ **Identity comes from the credential, never the request.** Without this, invariants 11–14 are meaningless.
+11. _(target)_ **Ownership is single and every mutation by an owner is fenced.** A stale holder's writes fail whether or not it obeys a stop message.
+12. _(target)_ **Completion is a claim until verified.** `submitted`, `completed`, `verified` and `achieved` are four different facts.
+13. _(target)_ **An agent can never widen its own authority, create agents outside policy, or evade a budget by delegation.** Grants delegate downward only; spawning and delegating are carve-outs.
+14. _(target)_ **Every state transition appends exactly one ledger event in the same transaction.**
+15. _(target)_ **Every time-dependent decision uses the database clock.**
 
 ## 4. Current-state assessment of Folie
 
 Verified 2026-11-04 by reading `src/` against the previous design text and running the suites: `bun run test` 383 passed and 11 skipped across 27 files, `bun run test:tui` 11 passed, `bunx tsc -p .` clean. No cluster was started; earlier "verified live" claims were not re-run. Detail and evidence: [`architecture/current-system.md`](architecture/current-system.md).
 
-| Class | Items |
-| --- | --- |
+| Class                                                | Items                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Implemented and tested** (PGlite, in-memory fakes) | Goal queue → pool dispatch → wake → bounded session → report; durable direct and topic mail with idempotent sends; peer delegation; elastic lifecycle (idle suspend, retire, operator ops); mid-session steering at turn boundaries; transcript and artifact events; replay safety (journal, `replay` tags, idempotency keys); OpenTelemetry tracing, metrics, JSON logs, OTLP pass-through gateway; operator TUI view-models and OpenTUI app (in-memory renderer); `folie up` manifest generation; CLI |
-| **Implemented, insufficiently tested** | pi against a real provider (only a `401` ever seen; real work unexercised); the controller against real ax and Substrate (tests use `FakeAx`/`FakeEgress`); OTLP gateway against a real collector; `folie up` end to end; concurrent writers (no multi-connection race tests); TUI in a real terminal beyond the in-memory renderer; agent-initiated `topic_publish` live |
-| **Implemented but wrong or unsafe** | D1 unauthenticated API with self-asserted identity (any pod can impersonate or delete any agent); D2 unbounded agent creation by messaging new names; D3 `wake_epoch` is a counter, not a fence; D4 `failed` work-item state unreachable; D5 `done` is the agent's say-so; D6 sessions recorded only at report; D8 ax `Workspace` and resource limits unused, no `ListTasks`; D9 single-process loop assumed; D10 no cancellation reaches a running session; D11 spend recorded at session end only |
-| **Planned, not implemented** | Everything in §5–§22 except the foundations above: goals and tasks, claims and fencing, verification, capabilities, teams, policy, gateway, budgets, harness contract, execution-provider port, event ledger, SSE, artifact store, memory service, extensions |
-| **Proposed, unresolved** | [OQ1–OQ13](decisions/README.md#open-architectural-questions): workload identity, workspace archive of suspended executions, LLM proxy feasibility, vector retrieval, verifier validity, ledger tamper-evidence, loop topology, GenAI conventions, OIDC/multi-swarm, memory poisoning, reputation, budget hot rows, UI extensions |
-| **Previously deferred, now required or excluded** | Blob storage (required: artifact store, R-4.4), backlog-aware scaling beyond one goal per agent (superseded by the scheduler), deleting retired agent rows, TUI mouse selection (push updates are required, R-15.6), reconnecting a dropped port-forward, multi-VPC operation, `ax ssh` hop-in, tools-as-CLI |
+| **Implemented, insufficiently tested**               | pi against a real provider (only a `401` ever seen; real work unexercised); the controller against real ax and Substrate (tests use `FakeAx`/`FakeEgress`); OTLP gateway against a real collector; `folie up` end to end; concurrent writers (no multi-connection race tests); TUI in a real terminal beyond the in-memory renderer; agent-initiated `topic_publish` live                                                                                                                               |
+| **Implemented but wrong or unsafe**                  | D1 unauthenticated API with self-asserted identity (any pod can impersonate or delete any agent); D2 unbounded agent creation by messaging new names; D3 `wake_epoch` is a counter, not a fence; D4 `failed` work-item state unreachable; D5 `done` is the agent's say-so; D6 sessions recorded only at report; D8 ax `Workspace` and resource limits unused, no `ListTasks`; D9 single-process loop assumed; D10 no cancellation reaches a running session; D11 spend recorded at session end only     |
+| **Planned, not implemented**                         | Everything in §5–§22 except the foundations above: goals and tasks, claims and fencing, verification, capabilities, teams, policy, gateway, budgets, harness contract, execution-provider port, event ledger, SSE, artifact store, memory service, extensions                                                                                                                                                                                                                                           |
+| **Proposed, unresolved**                             | [OQ1–OQ13](decisions/README.md#open-architectural-questions): workload identity, workspace archive of suspended executions, LLM proxy feasibility, vector retrieval, verifier validity, ledger tamper-evidence, loop topology, GenAI conventions, OIDC/multi-swarm, memory poisoning, reputation, budget hot rows, UI extensions                                                                                                                                                                        |
+| **Previously deferred, now required or excluded**    | Blob storage (required: artifact store, R-4.4), backlog-aware scaling beyond one goal per agent (superseded by the scheduler), deleting retired agent rows, TUI mouse selection (push updates are required, R-15.6), reconnecting a dropped port-forward, multi-VPC operation, `ax ssh` hop-in, tools-as-CLI                                                                                                                                                                                            |
 
 **Where documentation and code disagreed, the code is the current state** (D1–D12 in the as-built reference; three fixes to the old text: messages are not forge-proof, work items have no priority/context columns, ax `Workspace` is not bound to tasks).
 
@@ -114,7 +114,7 @@ Verified 2026-11-04 by reading `src/` against the previous design text and runni
 
 ## 5. Target architecture
 
-A **modular monolith**: one deployable server with enforced internal module boundaries, plus the agent shim in each sandbox. The brief's seven layers are adopted with two changes made after inspecting dependencies: *Agent Runtime* splits into the part that runs **in the sandbox** (shim + harness) and the part that runs **in the server** (session registry, context assembly, memory), because that is the real trust boundary; and *Coordination* is not a separate deployable but modules (`messaging`, `discovery`, `negotiation`, `teams`) over the same transaction scope as the task machinery, since claims and nominations must commit atomically with state.
+A **modular monolith**: one deployable server with enforced internal module boundaries, plus the agent shim in each sandbox. The brief's seven layers are adopted with two changes made after inspecting dependencies: _Agent Runtime_ splits into the part that runs **in the sandbox** (shim + harness) and the part that runs **in the server** (session registry, context assembly, memory), because that is the real trust boundary; and _Coordination_ is not a separate deployable but modules (`messaging`, `discovery`, `negotiation`, `teams`) over the same transaction scope as the task machinery, since claims and nominations must commit atomically with state.
 
 ```mermaid
 graph TD
@@ -141,7 +141,7 @@ graph TD
     API --> Control & Coord & RT & GW
     EXEC -->|ExecutionProvider port| AX[AX adapter] --> ax[ax + Substrate]
     GW -->|ToolProvider| EXT[extensions / external systems]
-    Server --> PG[(PostgreSQL)] 
+    Server --> PG[(PostgreSQL)]
     Server --> ART[(artifact store)]
     Server -.OTLP.-> OTEL[collector]
     ax --> SANDBOX
@@ -152,26 +152,26 @@ graph TD
     Clients -->|HTTP + SSE| API
 ```
 
-**Dependency rule** ([interfaces §1](spec/interfaces.md#1-layering-and-the-dependency-rule)): `domain` imports nothing infrastructural (no Pi, AX, OTel, Postgres); `ports` are interfaces over the domain; `app` use cases depend on ports and may use the OTel *API* behind `Observability`; adapters implement ports and import their vendor SDK; composition roots wire everything. A test enforces it. Abstractions exist only where a second implementation is foreseeable now: `Store`, `ExecutionProvider`, `Harness`, `ToolProvider`, `VerifierAdapter`, `ArtifactStore`, `MemoryStore`, `Observability`, `PolicyEngine` (pure).
+**Dependency rule** ([interfaces §1](spec/interfaces.md#1-layering-and-the-dependency-rule)): `domain` imports nothing infrastructural (no Pi, AX, OTel, Postgres); `ports` are interfaces over the domain; `app` use cases depend on ports and may use the OTel _API_ behind `Observability`; adapters implement ports and import their vendor SDK; composition roots wire everything. A test enforces it. Abstractions exist only where a second implementation is foreseeable now: `Store`, `ExecutionProvider`, `Harness`, `ToolProvider`, `VerifierAdapter`, `ArtifactStore`, `MemoryStore`, `Observability`, `PolicyEngine` (pure).
 
 ## 6. Component responsibilities and interfaces
 
-| Component (layer) | Owns | Depends on (ports) | Today |
-| --- | --- | --- | --- |
-| **API + stream** (client) | routing, authentication, request envelope, SSE over the ledger | `app`, `Store` | `http.ts`, no auth |
-| **goals, tasks** (control) | goal/task state machines, claims, leases, fences, sweeper, dependency counters, plan changes | `Store`, ledger, policy, budgets | flat `work_items` |
-| **agents, capabilities** (control) | identity, profiles, credentials, grants, capability levels and evidence | `Store` | names + state |
-| **scheduler** (control) | nomination and assignment scoring; admission; caps | `Store` | `pool.ts` |
-| **verification** (control) | contracts, acceptance job, verify tasks, adapters, aggregation, audits | `Store`, `VerifierAdapter`, `ExecutionProvider` | none |
-| **budgets** (control) | tree, carve-out, reserve/commit, enforcement | `Store` | usage recorded |
-| **policy** (control) | pure decision function over a snapshot | none | none |
-| **messaging, discovery, negotiation, teams** (coordination) | deliveries, channels, control signals, nominations, offers, teams | `Store` | inbox, topics |
-| **sessions, context, memory** (runtime, server side) | session registry, context pack, scoped memory | `Store`, `MemoryStore` | session events, reports |
-| **shim + harness** (runtime, in sandbox) | session loop, control watcher, heartbeats, hosted tool pipeline, harness | HTTP API, `Harness` | `AgentLoop`, `PiRuntime` |
-| **execution reconciler** (execution) | desired/recorded/actual comparison, wake, suspend, retire, loss recovery | `ExecutionProvider` | `Controller` |
-| **gateway, vault** (integration) | all effects outside the sandbox; credentials | `ToolProvider`, policy, budgets | none |
-| **ledger** (persistence) | append-only history and client feed | `Store` | none |
-| **observability** (persistence) | spans, metrics, logs | `Observability` | `telemetry.ts` |
+| Component (layer)                                           | Owns                                                                                         | Depends on (ports)                              | Today                    |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------- | ------------------------ |
+| **API + stream** (client)                                   | routing, authentication, request envelope, SSE over the ledger                               | `app`, `Store`                                  | `http.ts`, no auth       |
+| **goals, tasks** (control)                                  | goal/task state machines, claims, leases, fences, sweeper, dependency counters, plan changes | `Store`, ledger, policy, budgets                | flat `work_items`        |
+| **agents, capabilities** (control)                          | identity, profiles, credentials, grants, capability levels and evidence                      | `Store`                                         | names + state            |
+| **scheduler** (control)                                     | nomination and assignment scoring; admission; caps                                           | `Store`                                         | `pool.ts`                |
+| **verification** (control)                                  | contracts, acceptance job, verify tasks, adapters, aggregation, audits                       | `Store`, `VerifierAdapter`, `ExecutionProvider` | none                     |
+| **budgets** (control)                                       | tree, carve-out, reserve/commit, enforcement                                                 | `Store`                                         | usage recorded           |
+| **policy** (control)                                        | pure decision function over a snapshot                                                       | none                                            | none                     |
+| **messaging, discovery, negotiation, teams** (coordination) | deliveries, channels, control signals, nominations, offers, teams                            | `Store`                                         | inbox, topics            |
+| **sessions, context, memory** (runtime, server side)        | session registry, context pack, scoped memory                                                | `Store`, `MemoryStore`                          | session events, reports  |
+| **shim + harness** (runtime, in sandbox)                    | session loop, control watcher, heartbeats, hosted tool pipeline, harness                     | HTTP API, `Harness`                             | `AgentLoop`, `PiRuntime` |
+| **execution reconciler** (execution)                        | desired/recorded/actual comparison, wake, suspend, retire, loss recovery                     | `ExecutionProvider`                             | `Controller`             |
+| **gateway, vault** (integration)                            | all effects outside the sandbox; credentials                                                 | `ToolProvider`, policy, budgets                 | none                     |
+| **ledger** (persistence)                                    | append-only history and client feed                                                          | `Store`                                         | none                     |
+| **observability** (persistence)                             | spans, metrics, logs                                                                         | `Observability`                                 | `telemetry.ts`           |
 
 Interfaces: [`spec/interfaces.md`](spec/interfaces.md). Each component's state, invariants and failure behaviour are in the architecture documents, each of which closes with a "Requirements" section naming its requirement ids and a "Tests" section; protocols state failure behaviour per protocol.
 
@@ -200,11 +200,11 @@ The graph is **evolving, not a static DAG**: typed edges (`hard|soft|informs`, `
 
 Full treatment: [`architecture/work-and-coordination.md`](architecture/work-and-coordination.md#communication-coordination-organization); protocols: [`spec/protocols.md`](spec/protocols.md) §2–§7.
 
-| Layer | Mechanisms | Authority | Today |
-| --- | --- | --- | --- |
-| **Communication** | Durable inboxes, direct/topic/goal/task/team channels, priority and expiry, publication separate from delivery, urgent delivery through a control watcher, authenticated provenance | runtime delivers, agents decide content | partial |
-| **Coordination** | Task graph; claims, leases, fences; nomination plus pull discovery; offers, bids, handoff; dedup; stall and loop detection; budgets | **runtime decides** by conditional updates; agents propose | none |
-| **Organization** | Teams, capacity requests, delegation with budget carve-out, participation, reputation-weighted nomination | runtime enforces bounds; agents choose structure | none |
+| Layer             | Mechanisms                                                                                                                                                                          | Authority                                                  | Today   |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------- |
+| **Communication** | Durable inboxes, direct/topic/goal/task/team channels, priority and expiry, publication separate from delivery, urgent delivery through a control watcher, authenticated provenance | runtime delivers, agents decide content                    | partial |
+| **Coordination**  | Task graph; claims, leases, fences; nomination plus pull discovery; offers, bids, handoff; dedup; stall and loop detection; budgets                                                 | **runtime decides** by conditional updates; agents propose | none    |
+| **Organization**  | Teams, capacity requests, delegation with budget carve-out, participation, reputation-weighted nomination                                                                           | runtime enforces bounds; agents choose structure           | none    |
 
 Messaging does not by itself produce organization; five mechanisms do: a shared queryable work representation, cheap safe commitment and release, cheap discovery, resource accountability, and verified outcomes feeding back into nomination. Every organizing act is bounded and metered, and each mechanism is switchable so its value is **measured against baselines**, not assumed.
 
@@ -244,12 +244,12 @@ Full treatment: [`architecture/governance-and-resources.md`](architecture/govern
 
 Full treatment: [`architecture/work-and-coordination.md`](architecture/work-and-coordination.md#verification-subsystem); decision: [ADR 0003](decisions/0003-completion-states-and-verification.md).
 
-| Claim | State | Established by |
-| --- | --- | --- |
-| Agent-reported completion | `submitted` | the holder, with a valid fence |
+| Claim                       | State       | Established by                                                                                                                      |
+| --------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Agent-reported completion   | `submitted` | the holder, with a valid fence                                                                                                      |
 | Runtime-accepted completion | `completed` | deterministic acceptance (fence valid, outputs present and hashed, inputs and revision not stale, no pending approval-gated effect) |
-| Verified completion | `verified` | all required contract checks passed with enforced independence |
-| Goal-level success | `achieved` | goal evaluation against acceptance criteria (coverage + goal checks + optional human approval) |
+| Verified completion         | `verified`  | all required contract checks passed with enforced independence                                                                      |
+| Goal-level success          | `achieved`  | goal evaluation against acceptance criteria (coverage + goal checks + optional human approval)                                      |
 
 The contract is fixed at acceptance. Checks are deterministic adapters (artifact schema/hash, citation resolution, test runs in a **separate verification execution** from an immutable snapshot, proof checkers, external-state reconcilers), independent review tasks (producer and participants excluded; no producer transcript by default; quorum), and human checks. No universal verifier: the contract names the domain's checks; without a deterministic verifier the contract names a substitute (independent re-derivation, evidence audit, human sample) and pure judgment is confidence-capped at 0.7 unless corroborated. Verifiers are audited with canary artifacts and re-verification samples. Confidence and uncertainty are stored and displayed; "all passed" and "all passed, one at 0.7 by judgment" are never collapsed.
 
@@ -287,41 +287,41 @@ Full treatment: [`architecture/integration.md`](architecture/integration.md#exte
 
 ## 20. Failure handling and recovery
 
-| Failure | Detection | Recovery | Spec |
-| --- | --- | --- | --- |
-| Agent process dies mid-task | lease lapses or execution `lost` | leases revoked, session `abandoned`, deliveries return, task re-opened with higher fence on next claim, attempt recorded | protocols §4, §14 |
-| Agent unresponsive holding a claim | no heartbeat or no progress counter movement | lease expiry; stall revoke; stale writes fenced | §4, §16 |
-| Two claimants | conditional update | one winner, `409` for the other | §3 |
-| Stale holder commits | fence mismatch | rejected; artifacts quarantined; gateway re-checks at dispatch | §4 |
-| Execution provider loses a task | reconciler: desired vs recorded vs listed | as above; workspace from checkpoint, archive or empty with `workspace.memory_lost` | §14 |
-| Server crash | restart | state is durable; loops are leader-elected and idempotent; gateway marks `dispatched` as `unknown` and reconciles, never re-dispatches | §11 |
-| Lost HTTP response | `request_id` | replay returns the stored result | domain model §6 |
-| Duplicate side effect | idempotency key | provider honours key, else `unknown` + reconcile, never auto-retry `none` | §11 |
-| Verification fails or errors | contract | retry with findings, escalate, `errored` blocks `verified` and alerts | §8 |
-| Budget exhausted | usage commit | `control: stop`, goal pause, overrun recorded | §12 |
-| Plan invalidated | revision, dependency change | stale flags, control messages, acceptance guards | §9 |
-| Verifier collusion or error | canaries, audits | verifier demotion, human check requirement | §8 |
-| Telemetry loss | n/a | no effect on state | §17 |
-| Transcript gap | known best-effort delivery | never fails a session; ledger and artifacts unaffected | current-system |
+| Failure                            | Detection                                    | Recovery                                                                                                                               | Spec              |
+| ---------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| Agent process dies mid-task        | lease lapses or execution `lost`             | leases revoked, session `abandoned`, deliveries return, task re-opened with higher fence on next claim, attempt recorded               | protocols §4, §14 |
+| Agent unresponsive holding a claim | no heartbeat or no progress counter movement | lease expiry; stall revoke; stale writes fenced                                                                                        | §4, §16           |
+| Two claimants                      | conditional update                           | one winner, `409` for the other                                                                                                        | §3                |
+| Stale holder commits               | fence mismatch                               | rejected; artifacts quarantined; gateway re-checks at dispatch                                                                         | §4                |
+| Execution provider loses a task    | reconciler: desired vs recorded vs listed    | as above; workspace from checkpoint, archive or empty with `workspace.memory_lost`                                                     | §14               |
+| Server crash                       | restart                                      | state is durable; loops are leader-elected and idempotent; gateway marks `dispatched` as `unknown` and reconciles, never re-dispatches | §11               |
+| Lost HTTP response                 | `request_id`                                 | replay returns the stored result                                                                                                       | domain model §6   |
+| Duplicate side effect              | idempotency key                              | provider honours key, else `unknown` + reconcile, never auto-retry `none`                                                              | §11               |
+| Verification fails or errors       | contract                                     | retry with findings, escalate, `errored` blocks `verified` and alerts                                                                  | §8                |
+| Budget exhausted                   | usage commit                                 | `control: stop`, goal pause, overrun recorded                                                                                          | §12               |
+| Plan invalidated                   | revision, dependency change                  | stale flags, control messages, acceptance guards                                                                                       | §9                |
+| Verifier collusion or error        | canaries, audits                             | verifier demotion, human check requirement                                                                                             | §8                |
+| Telemetry loss                     | n/a                                          | no effect on state                                                                                                                     | §17               |
+| Transcript gap                     | known best-effort delivery                   | never fails a session; ledger and artifacts unaffected                                                                                 | current-system    |
 
 ## 21. Requirements and conformance
 
 The specification is [`spec/requirements.md`](spec/requirements.md): 96 numbered requirements with normative keywords (`MUST`, `MUST NOT`, `SHOULD`, `MAY`), each bound to a named automated test or a recorded live run. **There is no staging: every `MUST` is required of one system.** The requirements are grouped as follows.
 
-| Group | Requirements | Subject |
-| --- | --- | --- |
-| Identity and access | R-1.1–1.5 | principals from credentials, token revocation, route authorization, hard prohibitions, registration-only agents |
-| Messaging | R-2.1–2.8 | delivery states, publications, wake rules, urgent delivery, cancel semantics, channels, provenance, idempotency |
-| Agents, sessions, memory | R-3.1–3.6, R-4.1–4.5 | six separate lifecycles, session at start, scope and limits, per-session config, scoped memory, artifacts, context pack |
-| Harness and execution | R-5.1–5.4, R-6.1–6.6 | harness contract, hosted tool pipeline, two harnesses, provider port, reconciliation, loss recovery, leader election |
-| Goals and tasks | R-7.1–7.4, R-8.1–8.10 | goal revisions, `achieved` by evaluation, the 20 task transitions, claims, leases, fences, dependencies, atomic replanning, runaway limits |
-| Coordination | R-9.1–9.9 | nomination, pull, offers, help, teams, capacity requests, stall detection, no deadlock, switchable mechanisms |
-| Capabilities, tools, extensions | R-10.1–10.6 | capability evidence, eligibility, tool definitions, bounded surface, five extension contracts, isolation |
-| Verification | R-11.1–11.7 | four completion claims, immutable contract, enforced independence, deterministic and review checks, goal evaluation, confidence, audits |
-| Governance | R-12.1–12.9 | policy order and fail-closed, downward delegation, risk classes, gateway, credentials, approvals, reconciliation, trust profiles, kill paths |
-| Budgets and scheduling | R-13.1–13.5 | hierarchical budgets, no evasion, enforcement tiers, quotas, deterministic fair scheduling |
-| Data and ledger | R-14.1–14.5 | one event per transition, aggregates and concurrency primitives, database clock, additive migration, crash recovery |
-| Observability and clients | R-15.1–15.7 | correlation, bounded episodes, propagation, metric set, not-authoritative, TUI as a client, evaluation from the ledger |
+| Group                           | Requirements          | Subject                                                                                                                                      |
+| ------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Identity and access             | R-1.1–1.5             | principals from credentials, token revocation, route authorization, hard prohibitions, registration-only agents                              |
+| Messaging                       | R-2.1–2.8             | delivery states, publications, wake rules, urgent delivery, cancel semantics, channels, provenance, idempotency                              |
+| Agents, sessions, memory        | R-3.1–3.6, R-4.1–4.5  | six separate lifecycles, session at start, scope and limits, per-session config, scoped memory, artifacts, context pack                      |
+| Harness and execution           | R-5.1–5.4, R-6.1–6.6  | harness contract, hosted tool pipeline, two harnesses, provider port, reconciliation, loss recovery, leader election                         |
+| Goals and tasks                 | R-7.1–7.4, R-8.1–8.10 | goal revisions, `achieved` by evaluation, the 20 task transitions, claims, leases, fences, dependencies, atomic replanning, runaway limits   |
+| Coordination                    | R-9.1–9.9             | nomination, pull, offers, help, teams, capacity requests, stall detection, no deadlock, switchable mechanisms                                |
+| Capabilities, tools, extensions | R-10.1–10.6           | capability evidence, eligibility, tool definitions, bounded surface, five extension contracts, isolation                                     |
+| Verification                    | R-11.1–11.7           | four completion claims, immutable contract, enforced independence, deterministic and review checks, goal evaluation, confidence, audits      |
+| Governance                      | R-12.1–12.9           | policy order and fail-closed, downward delegation, risk classes, gateway, credentials, approvals, reconciliation, trust profiles, kill paths |
+| Budgets and scheduling          | R-13.1–13.5           | hierarchical budgets, no evasion, enforcement tiers, quotas, deterministic fair scheduling                                                   |
+| Data and ledger                 | R-14.1–14.5           | one event per transition, aggregates and concurrency primitives, database clock, additive migration, crash recovery                          |
+| Observability and clients       | R-15.1–15.7           | correlation, bounded episodes, propagation, metric set, not-authoritative, TUI as a client, evaluation from the ledger                       |
 
 **Met when:** every `MUST` has a passing conformance test, every live requirement has a recorded run, and demonstrations E1–E6 ([requirements §2](spec/requirements.md#2-demonstrations)) pass on the recorded configuration.
 

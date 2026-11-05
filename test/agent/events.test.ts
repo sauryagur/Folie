@@ -14,7 +14,10 @@ describe("EventSink", () => {
     s.emit("session_start", {});
     s.emit("message", { n: 1 });
     await s.flush();
-    expect(got.flat().map((e) => [e.seq, e.type])).toEqual([[0, "session_start"], [1, "message"]]);
+    expect(got.flat().map((e) => [e.seq, e.type])).toEqual([
+      [0, "session_start"],
+      [1, "message"],
+    ]);
   });
 
   it("splits large backlogs into bounded batches", async () => {

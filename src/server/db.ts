@@ -20,7 +20,9 @@ export function pgDatabase(connectionString: string): Database {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        const out = await fn({ query: (text, params) => client.query(text, params) });
+        const out = await fn({
+          query: (text, params) => client.query(text, params),
+        });
         await client.query("COMMIT");
         return out;
       } catch (e) {

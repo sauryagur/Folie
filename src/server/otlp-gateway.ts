@@ -13,10 +13,17 @@ export const OTLP_SIGNAL_PATH: Record<string, OtlpSignal> = {
 
 export interface OtlpGateway {
   /** Returns the HTTP status to answer the agent with. Never throws: telemetry must not break a session. */
-  forward(signal: OtlpSignal, body: Uint8Array, headers: { contentType: string; contentEncoding?: string }): Promise<number>;
+  forward(
+    signal: OtlpSignal,
+    body: Uint8Array,
+    headers: { contentType: string; contentEncoding?: string },
+  ): Promise<number>;
 }
 
-export function otlpGateway(endpoint: string | undefined, fetchFn: (url: string, init: RequestInit) => Promise<Response> = fetch): OtlpGateway {
+export function otlpGateway(
+  endpoint: string | undefined,
+  fetchFn: (url: string, init: RequestInit) => Promise<Response> = fetch,
+): OtlpGateway {
   return {
     async forward(signal, body, { contentType, contentEncoding }) {
       // No collector configured: accept and drop, so agents do not retry or log errors for a feature that is off.
@@ -24,7 +31,10 @@ export function otlpGateway(endpoint: string | undefined, fetchFn: (url: string,
       try {
         const res = await fetchFn(`${endpoint}/v1/${signal}`, {
           method: "POST",
-          headers: { "content-type": contentType, ...(contentEncoding ? { "content-encoding": contentEncoding } : {}) },
+          headers: {
+            "content-type": contentType,
+            ...(contentEncoding ? { "content-encoding": contentEncoding } : {}),
+          },
           body: body as Uint8Array<ArrayBuffer>,
         });
         return res.status;

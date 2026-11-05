@@ -54,7 +54,10 @@ export function applyPoll(s: TuiState, p: PollResult): TuiState {
   const known = new Set(s.stream.map((m) => m.id));
   const fresh = p.messages.filter((m) => !known.has(m.id));
   const stream = [...s.stream, ...fresh].slice(-STREAM_CAP);
-  const selected = s.selected !== null && p.agents.some((a) => a.name === s.selected) ? s.selected : (p.agents[0]?.name ?? null);
+  const selected =
+    s.selected !== null && p.agents.some((a) => a.name === s.selected)
+      ? s.selected
+      : (p.agents[0]?.name ?? null);
   return {
     ...s,
     agents: p.agents,
@@ -75,17 +78,25 @@ export const pollFailed = (s: TuiState, error: unknown): TuiState => ({
   status: `server unreachable: ${error instanceof Error ? error.message : String(error)}`,
 });
 
-export const withStatus = (s: TuiState, status: string): TuiState => ({ ...s, status });
+export const withStatus = (s: TuiState, status: string): TuiState => ({
+  ...s,
+  status,
+});
 
 export function moveSelection(s: TuiState, delta: number): TuiState {
   if (s.agents.length === 0) return s;
-  const at = Math.max(0, s.agents.findIndex((a) => a.name === s.selected));
+  const at = Math.max(
+    0,
+    s.agents.findIndex((a) => a.name === s.selected),
+  );
   const next = Math.min(Math.max(at + delta, 0), s.agents.length - 1);
   return { ...s, selected: s.agents[next]!.name, inbox: [], reports: [] };
 }
 
 export function select(s: TuiState, name: string): TuiState {
-  return s.selected === name ? s : { ...s, selected: name, inbox: [], reports: [] };
+  return s.selected === name
+    ? s
+    : { ...s, selected: name, inbox: [], reports: [] };
 }
 
 export function cycleView(s: TuiState, step = 1): TuiState {
@@ -119,21 +130,35 @@ export interface FleetRow {
   line: string;
 }
 
-const nameWidth = (agents: AgentInfo[]) => Math.min(Math.max(...agents.map((a) => a.name.length), 5), 24);
+const nameWidth = (agents: AgentInfo[]) =>
+  Math.min(Math.max(...agents.map((a) => a.name.length), 5), 24);
 
-const columns = (name: string, state: string, mail: string, quiet: string, width: number) =>
+const columns = (
+  name: string,
+  state: string,
+  mail: string,
+  quiet: string,
+  width: number,
+) =>
   `${name.padEnd(width)}  ${state.padEnd(9)} ${mail.padStart(4)} ${quiet.padStart(5)}`;
 
 export function fleetRows(agents: AgentInfo[], now: number): FleetRow[] {
   const width = nameWidth(agents);
   return agents.map((a) => ({
     name: a.name,
-    line: columns(a.name, activity(a), String(a.unread), ageLabel(a.lastActiveAt, now), width),
+    line: columns(
+      a.name,
+      activity(a),
+      String(a.unread),
+      ageLabel(a.lastActiveAt, now),
+      width,
+    ),
   }));
 }
 
 /** Header for the grid; the leading gutter matches the list's selection marker. */
-export const fleetHeader = (agents: AgentInfo[]) => `   ${columns("agent", "state", "mail", "quiet", nameWidth(agents))}`;
+export const fleetHeader = (agents: AgentInfo[]) =>
+  `   ${columns("agent", "state", "mail", "quiet", nameWidth(agents))}`;
 
 const utcTime = (iso: string) => new Date(iso).toISOString().slice(11, 19);
 
@@ -158,15 +183,28 @@ export function paneLines(s: TuiState): string[] {
   const who = s.selected ?? "(no agent)";
   switch (s.view) {
     case "stream":
-      return s.stream.length ? s.stream.map(formatMessage) : ["No messages yet. Submit a goal with: submit <goal>"];
+      return s.stream.length
+        ? s.stream.map(formatMessage)
+        : ["No messages yet. Submit a goal with: submit <goal>"];
     case "inbox":
-      return s.inbox.length ? s.inbox.map(formatMessage) : [`${who}: inbox empty`];
+      return s.inbox.length
+        ? s.inbox.map(formatMessage)
+        : [`${who}: inbox empty`];
     case "reports":
-      return s.reports.length ? s.reports.map(formatReport) : [`${who}: no reports yet`];
+      return s.reports.length
+        ? s.reports.map(formatReport)
+        : [`${who}: no reports yet`];
     case "topics":
-      return s.topics.length ? s.topics.map(formatTopic) : ["No topics yet. Try: subscribe <topic> [agent]"];
+      return s.topics.length
+        ? s.topics.map(formatTopic)
+        : ["No topics yet. Try: subscribe <topic> [agent]"];
   }
 }
 
 export const paneTitle = (s: TuiState) =>
-  ({ stream: "message stream", inbox: `inbox: ${s.selected ?? "-"}`, reports: `reports: ${s.selected ?? "-"}`, topics: "topics" })[s.view];
+  ({
+    stream: "message stream",
+    inbox: `inbox: ${s.selected ?? "-"}`,
+    reports: `reports: ${s.selected ?? "-"}`,
+    topics: "topics",
+  })[s.view];

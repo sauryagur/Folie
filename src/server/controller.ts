@@ -4,7 +4,13 @@
 //            long-quiet suspended ones are retired, and dead ones are reconciled
 // Reconciliation reads the provider's actual state via list() once per pass (R-6.2).
 import type { Logger } from "../shared/logger";
-import type { ExecutionProvider, ExecutionState, ExecutionSpec, NetworkPolicy, ProviderRef } from "./provider";
+import type {
+  ExecutionProvider,
+  ExecutionState,
+  ExecutionSpec,
+  NetworkPolicy,
+  ProviderRef,
+} from "./provider";
 import type { AgentRepo, AuthRepo, ExecutionRegistryRepo } from "./store";
 import { AGENT_NAME, type AgentOp, type AgentOpResult } from "../shared/types";
 import { contextFrom, storableTrace, withSpan } from "../shared/trace";
@@ -27,9 +33,22 @@ export interface ControllerConfig {
   deleteAfterSec: number;
 }
 
-export type ControllerAgents = Pick<AgentRepo, "wakeDemand" | "retrace" | "idle" | "setState" | "touch">;
-export type ControllerAuth = Pick<AuthRepo, "mintAgentToken" | "upsertExecution" | "setExecutionState" | "getAgentCredential" | "revokeAgentTokens">;
-export type ControllerRegistry = Pick<ExecutionRegistryRepo, "record" | "listLive" | "setState" | "markLostForAgent" | "get">;
+export type ControllerAgents = Pick<
+  AgentRepo,
+  "wakeDemand" | "retrace" | "idle" | "setState" | "touch"
+>;
+export type ControllerAuth = Pick<
+  AuthRepo,
+  | "mintAgentToken"
+  | "upsertExecution"
+  | "setExecutionState"
+  | "getAgentCredential"
+  | "revokeAgentTokens"
+>;
+export type ControllerRegistry = Pick<
+  ExecutionRegistryRepo,
+  "record" | "listLive" | "setState" | "markLostForAgent" | "get"
+>;
 
 export class Controller implements AgentOps {
   constructor(
@@ -46,19 +65,41 @@ export class Controller implements AgentOps {
   async reconcileOnce(): Promise<void> {
     // Actual provider state, read once: the sweep and wakes reconcile against it instead of per-agent gets.
     const snapshot = new Map<string, ExecutionState>();
-    for await (const st of this.provider.list(this.cfg.namespace)) snapshot.set(st.ref.key, st);
-    for (const d of await this.agents.wakeDemand()) await this.guard("wake", d.name, () => this.wake(d.name, d, snapshot));
-    const suspendAfter = await this.agents.idle("running", this.cfg.suspendAfterSec);
-    for (const name of suspendAfter) await this.guard("suspend", name, async () => this.suspend(name, snapshot.get(name) ?? (await this.inspectAgent(name))));
-    const deleteAfter = await this.agents.idle("suspended", this.cfg.deleteAfterSec);
-    for (const name of deleteAfter) await this.guard("retire", name, async () => this.retire(name, snapshot.get(name) ?? (await this.inspectAgent(name))));
+    for await (const st of this.provider.list(this.cfg.namespace))
+      snapshot.set(st.ref.key, st);
+    for (const d of await this.agents.wakeDemand())
+      await this.guard("wake", d.name, () => this.wake(d.name, d, snapshot));
+    const suspendAfter = await this.agents.idle(
+      "running",
+      this.cfg.suspendAfterSec,
+    );
+    for (const name of suspendAfter)
+      await this.guard("suspend", name, async () =>
+        this.suspend(
+          name,
+          snapshot.get(name) ?? (await this.inspectAgent(name)),
+        ),
+      );
+    const deleteAfter = await this.agents.idle(
+      "suspended",
+      this.cfg.deleteAfterSec,
+    );
+    for (const name of deleteAfter)
+      await this.guard("retire", name, async () =>
+        this.retire(
+          name,
+          snapshot.get(name) ?? (await this.inspectAgent(name)),
+        ),
+      );
     // Ghost detection (R-6.3): a recorded running execution the provider no longer reports is lost.
     // Provisioning rows are excluded: ensure() may not have landed yet on this pass.
     if (this.registry) {
       for (const live of await this.registry.listLive().catch(() => [])) {
         if (!snapshot.has(live.agent) && live.state === "running") {
           await this.registry.setState(live.id, "lost").catch(() => undefined);
-          this.log.log(`controller: ${live.agent} execution ${live.id} lost (not reported by provider)`);
+          this.log.log(
+            `controller: ${live.agent} execution ${live.id} lost (not reported by provider)`,
+          );
         }
       }
     }
@@ -66,7 +107,8 @@ export class Controller implements AgentOps {
 
   /** Operator steering. Every op leaves the agent's recorded state matching the provider, so the sweep does not fight it. */
   async run(op: AgentOp, name: string): Promise<AgentOpResult> {
-    if (!AGENT_NAME.test(name)) throw new ValidationError("agent: invalid agent name");
+    if (!AGENT_NAME.test(name))
+      throw new ValidationError("agent: invalid agent name");
     const ref = this.refOf(name);
 
     if (op === "delete") {
@@ -75,14 +117,16 @@ export class Controller implements AgentOps {
       if (st) await this.provider.terminate(ref, { destroyWorkspace: true });
       await this.agents.setState(name, "retired");
       // Revoke execution token(s); agent identity remains but stale tokens must fail.
-      if (this.auth) await this.auth.revokeAgentTokens(name).catch(() => undefined);
+      if (this.auth)
+        await this.auth.revokeAgentTokens(name).catch(() => undefined);
       return { agent: name, state: "retired" };
     }
     if (op === "suspend") {
       const st = await this.inspectAgent(name);
       if (!st) throw new NotFoundError(`${name} has no task`);
       if (st.phase === "running") await this.provider.suspend(ref);
-      else if (st.phase !== "suspended") throw new ValidationError(`${name} is ${st.phase}; cannot suspend`);
+      else if (st.phase !== "suspended")
+        throw new ValidationError(`${name} is ${st.phase}; cannot suspend`);
       await this.agents.setState(name, "suspended");
       return { agent: name, state: "suspended" };
     }
@@ -122,46 +166,97 @@ export class Controller implements AgentOps {
     if (st?.phase === "running") return;
     if (st && st.phase !== "suspended" && st.phase !== "provisioning") {
       // failed/unknown/transitional executions: leave visible rather than guess. Only the idle sweep deletes dead ones.
-      this.log.log(`controller: ${this.cfg.namespace}/${name} is ${st.phase}; not waking`);
+      this.log.log(
+        `controller: ${this.cfg.namespace}/${name} is ${st.phase}; not waking`,
+      );
       return;
     }
     const parent = cause ? contextFrom(cause) : undefined;
-    await withSpan(this.obs.tracer, "folie.controller.wake", { parent, attributes: { agent_name: name } }, () =>
-      withSpan(this.obs.tracer, "folie.sandbox.init", { attributes: { agent_name: name } }, async () => {
-        const ref = this.refOf(name);
-        let executionId: string | undefined;
-        if (!st) {
-          this.log.log(`controller: creating ${this.cfg.namespace}/${name}`);
-          // Mint a per-execution bearer token BEFORE creating the execution: it is injected via env so the new process authenticates.
-          if (this.auth) {
-            const cred = await this.auth.getAgentCredential(name).catch(() => null);
-            const generation = cred?.generation ?? 1;
-            executionId = generateExecutionId();
-            const token = await this.auth.mintAgentToken(name, executionId, generation);
-            await this.auth.upsertExecution(name, executionId, generation, "running");
-            if (this.registry) await this.registry.record({ id: executionId, agent: name, generation, state: "running", providerRef: { key: name, namespace: this.cfg.namespace } }).catch(() => undefined);
-            await this.provider.ensure(this.specFor(name, token, executionId));
-          } else {
-            await this.provider.ensure(this.specFor(name));
-          }
-        } else if (this.auth) {
-          // Execution exists (suspended/provisioning): its env is fixed from creation, so the original token stays valid.
-        }
-        // The provider denies all egress until the actor has a policy. Granting it before start is idempotent, so a
-        // crash between ensure and start heals on the next pass instead of waking a mute agent.
-        await this.provider.setNetworkPolicy(ref, { profile: "full-trust" });
-        // Unread mail now points at this init span; the session the agent starts on resume becomes its child.
-        await this.agents.retrace(name, storableTrace());
-        try {
-          await this.provider.start(ref);
-          await this.agents.setState(name, "running");
-          if (this.registry && executionId) await this.registry.setState(executionId, "running").catch(() => undefined);
-          if (this.registry) { const live = await this.registry.listLive().catch(() => []); for (const e of live) { if (e.agent === name) await this.registry.setState(e.id, "running").catch(() => undefined); } }
-        } catch (e) {
-          this.log.error(`controller: start ${this.cfg.namespace}/${name} failed:`, e);
-        }
-        this.log.log(`controller: resumed ${this.cfg.namespace}/${name}`);
-      }),
+    await withSpan(
+      this.obs.tracer,
+      "folie.controller.wake",
+      { parent, attributes: { agent_name: name } },
+      () =>
+        withSpan(
+          this.obs.tracer,
+          "folie.sandbox.init",
+          { attributes: { agent_name: name } },
+          async () => {
+            const ref = this.refOf(name);
+            let executionId: string | undefined;
+            if (!st) {
+              this.log.log(
+                `controller: creating ${this.cfg.namespace}/${name}`,
+              );
+              // Mint a per-execution bearer token BEFORE creating the execution: it is injected via env so the new process authenticates.
+              if (this.auth) {
+                const cred = await this.auth
+                  .getAgentCredential(name)
+                  .catch(() => null);
+                const generation = cred?.generation ?? 1;
+                executionId = generateExecutionId();
+                const token = await this.auth.mintAgentToken(
+                  name,
+                  executionId,
+                  generation,
+                );
+                await this.auth.upsertExecution(
+                  name,
+                  executionId,
+                  generation,
+                  "running",
+                );
+                if (this.registry)
+                  await this.registry
+                    .record({
+                      id: executionId,
+                      agent: name,
+                      generation,
+                      state: "running",
+                      providerRef: { key: name, namespace: this.cfg.namespace },
+                    })
+                    .catch(() => undefined);
+                await this.provider.ensure(
+                  this.specFor(name, token, executionId),
+                );
+              } else {
+                await this.provider.ensure(this.specFor(name));
+              }
+            } else if (this.auth) {
+              // Execution exists (suspended/provisioning): its env is fixed from creation, so the original token stays valid.
+            }
+            // The provider denies all egress until the actor has a policy. Granting it before start is idempotent, so a
+            // crash between ensure and start heals on the next pass instead of waking a mute agent.
+            await this.provider.setNetworkPolicy(ref, {
+              profile: "full-trust",
+            });
+            // Unread mail now points at this init span; the session the agent starts on resume becomes its child.
+            await this.agents.retrace(name, storableTrace());
+            try {
+              await this.provider.start(ref);
+              await this.agents.setState(name, "running");
+              if (this.registry && executionId)
+                await this.registry
+                  .setState(executionId, "running")
+                  .catch(() => undefined);
+              if (this.registry) {
+                const live = await this.registry.listLive().catch(() => []);
+                for (const e of live) {
+                  if (e.agent === name)
+                    await this.registry
+                      .setState(e.id, "running")
+                      .catch(() => undefined);
+                }
+              }
+            } catch (e) {
+              this.log.error(
+                `controller: start ${this.cfg.namespace}/${name} failed:`,
+                e,
+              );
+            }
+            this.log.log(`controller: resumed ${this.cfg.namespace}/${name}`);
+          },
+        ),
     );
   }
 
@@ -174,7 +269,13 @@ export class Controller implements AgentOps {
       namespace: this.cfg.namespace,
       image: this.cfg.image,
       command: this.cfg.command,
-      env: { ...this.cfg.env, FOLIE_AGENT: key, ...(agentToken ? { FOLIE_AGENT_TOKEN: agentToken, FOLIE_EXECUTION_ID: executionId } : {}) },
+      env: {
+        ...this.cfg.env,
+        FOLIE_AGENT: key,
+        ...(agentToken
+          ? { FOLIE_AGENT_TOKEN: agentToken, FOLIE_EXECUTION_ID: executionId }
+          : {}),
+      },
       ...(this.cfg.resources ? { resources: this.cfg.resources } : {}),
       workspace: { ref: `${key}-ws` },
       network: { profile: "full-trust" },
@@ -182,12 +283,18 @@ export class Controller implements AgentOps {
   }
 
   /** A quiet agent whose execution is running is checkpointed; one whose execution is gone or dead is reconciled instead. */
-  private async suspend(name: string, st: ExecutionState | null): Promise<void> {
+  private async suspend(
+    name: string,
+    st: ExecutionState | null,
+  ): Promise<void> {
     if (!st) return this.agents.setState(name, "retired");
-    if (st.phase === "suspended") return this.agents.setState(name, "suspended");
+    if (st.phase === "suspended")
+      return this.agents.setState(name, "suspended");
     if (st.phase === "failed") return this.retire(name, st);
     if (st.phase !== "running") return; // provisioning/unknown: transitional, look again next pass
-    this.log.log(`controller: suspending ${this.cfg.namespace}/${name} (quiet)`);
+    this.log.log(
+      `controller: suspending ${this.cfg.namespace}/${name} (quiet)`,
+    );
     await this.provider.suspend(this.refOf(name));
     await this.agents.setState(name, "suspended");
   }
@@ -196,8 +303,12 @@ export class Controller implements AgentOps {
   private async retire(name: string, st: ExecutionState | null): Promise<void> {
     if (st && st.phase !== "suspended" && st.phase !== "failed") return;
     if (st) {
-      this.log.log(`controller: retiring ${this.cfg.namespace}/${name} (${st.phase})`);
-      await this.provider.terminate(this.refOf(name), { destroyWorkspace: true });
+      this.log.log(
+        `controller: retiring ${this.cfg.namespace}/${name} (${st.phase})`,
+      );
+      await this.provider.terminate(this.refOf(name), {
+        destroyWorkspace: true,
+      });
     }
     await this.agents.setState(name, "retired");
   }

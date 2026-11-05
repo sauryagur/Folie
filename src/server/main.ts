@@ -17,9 +17,14 @@ await migrate(db);
 const store = pgStore(db);
 // Persist only the hash of the operator token.
 await store.auth.setOperatorToken(cfg.operatorToken);
-const telemetry = createTelemetry({ serviceName: "folie-server", otlpEndpoint: cfg.otlpEndpoint });
+const telemetry = createTelemetry({
+  serviceName: "folie-server",
+  otlpEndpoint: cfg.otlpEndpoint,
+});
 // Inbox depth is read from the store at each metrics collection, not tracked in memory.
-telemetry.metrics.observeInboxDepth(async () => (await store.agents.list()).map((a) => ({ agent: a.name, depth: a.unread })));
+telemetry.metrics.observeInboxDepth(async () =>
+  (await store.agents.list()).map((a) => ({ agent: a.name, depth: a.unread })),
+);
 const service = new SwarmService(store, telemetry);
 
 const controller = new Controller(
@@ -45,12 +50,22 @@ const timer = setInterval(async () => {
   }
 }, cfg.reconcileMs);
 
-const server = httpServer(service, controller, otlpGateway(cfg.otlpEndpoint), telemetry, store, cfg.operatorToken).listen(cfg.port, () =>
-  console.log(`folie-server listening on :${cfg.port}`),
-);
+const server = httpServer(
+  service,
+  controller,
+  otlpGateway(cfg.otlpEndpoint),
+  telemetry,
+  store,
+  cfg.operatorToken,
+).listen(cfg.port, () => console.log(`folie-server listening on :${cfg.port}`));
 
 for (const sig of ["SIGTERM", "SIGINT"] as const)
   process.on(sig, () => {
     clearInterval(timer);
-    server.close(() => telemetry.shutdown().then(() => db.close()).then(() => process.exit(0)));
+    server.close(() =>
+      telemetry
+        .shutdown()
+        .then(() => db.close())
+        .then(() => process.exit(0)),
+    );
   });

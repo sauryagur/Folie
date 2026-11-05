@@ -20,23 +20,55 @@ import type { AgentInfo, Message, Report } from "../../src/shared/types";
 const NOW = Date.parse("2026-11-04T12:00:00Z");
 
 const agent = (name: string, o: Partial<AgentInfo> = {}): AgentInfo => ({
-  name, state: "running", wakeEpoch: 1, unread: 0, lastActiveAt: "2026-11-04T11:59:30Z", ...o,
+  name,
+  state: "running",
+  wakeEpoch: 1,
+  unread: 0,
+  lastActiveAt: "2026-11-04T11:59:30Z",
+  ...o,
 });
 
 const msg = (id: number, o: Partial<Message> = {}): Message => ({
-  id, from: "human", to: "agent-1", body: `body ${id}`, workItemId: null, topic: null, createdAt: "2026-11-04T12:03:05Z", ackedAt: null, ...o,
+  id,
+  from: "human",
+  to: "agent-1",
+  body: `body ${id}`,
+  workItemId: null,
+  topic: null,
+  createdAt: "2026-11-04T12:03:05Z",
+  ackedAt: null,
+  ...o,
 });
 
-const poll = (o: Partial<PollResult> = {}): PollResult => ({ agents: [], messages: [], topics: [], ...o });
+const poll = (o: Partial<PollResult> = {}): PollResult => ({
+  agents: [],
+  messages: [],
+  topics: [],
+  ...o,
+});
 
 describe("applyPoll", () => {
   it("takes agents and topics as given and marks the connection up", () => {
-    const s = applyPoll(initialState(), poll({ agents: [agent("a")], topics: [{ topic: "t", subscribers: ["a"] }] }));
-    expect(s).toMatchObject({ agents: [{ name: "a" }], topics: [{ topic: "t" }], connected: true, status: "connected" });
+    const s = applyPoll(
+      initialState(),
+      poll({
+        agents: [agent("a")],
+        topics: [{ topic: "t", subscribers: ["a"] }],
+      }),
+    );
+    expect(s).toMatchObject({
+      agents: [{ name: "a" }],
+      topics: [{ topic: "t" }],
+      connected: true,
+      status: "connected",
+    });
   });
 
   it("selects the first agent, then keeps the selection across polls", () => {
-    let s = applyPoll(initialState(), poll({ agents: [agent("a"), agent("b")] }));
+    let s = applyPoll(
+      initialState(),
+      poll({ agents: [agent("a"), agent("b")] }),
+    );
     expect(s.selected).toBe("a");
     s = select(s, "b");
     s = applyPoll(s, poll({ agents: [agent("a"), agent("b"), agent("c")] }));
@@ -44,7 +76,10 @@ describe("applyPoll", () => {
   });
 
   it("falls back to the first agent when the selected one disappears, and to none when the fleet is empty", () => {
-    let s = select(applyPoll(initialState(), poll({ agents: [agent("a"), agent("b")] })), "b");
+    let s = select(
+      applyPoll(initialState(), poll({ agents: [agent("a"), agent("b")] })),
+      "b",
+    );
     s = applyPoll(s, poll({ agents: [agent("a")] }));
     expect(s.selected).toBe("a");
     expect(applyPoll(s, poll({ agents: [] })).selected).toBeNull();
@@ -59,7 +94,10 @@ describe("applyPoll", () => {
   });
 
   it("never moves the cursor backwards", () => {
-    const s = applyPoll(applyPoll(initialState(), poll({ messages: [msg(10)] })), poll({ messages: [] }));
+    const s = applyPoll(
+      applyPoll(initialState(), poll({ messages: [msg(10)] })),
+      poll({ messages: [] }),
+    );
     expect(s.cursor).toBe(10);
   });
 
@@ -81,8 +119,18 @@ describe("applyPoll", () => {
   });
 
   it("replaces inbox and reports only when the poll carried them", () => {
-    const report: Report = { id: 1, agent: "a", outcome: "done", summary: "s", messageIds: [], createdAt: "2026-11-04T12:00:00Z" };
-    let s = applyPoll(initialState(), poll({ inbox: [msg(1)], reports: [report] }));
+    const report: Report = {
+      id: 1,
+      agent: "a",
+      outcome: "done",
+      summary: "s",
+      messageIds: [],
+      createdAt: "2026-11-04T12:00:00Z",
+    };
+    let s = applyPoll(
+      initialState(),
+      poll({ inbox: [msg(1)], reports: [report] }),
+    );
     s = applyPoll(s, poll());
     expect(s.inbox).toHaveLength(1);
     expect(s.reports).toHaveLength(1);
@@ -92,9 +140,15 @@ describe("applyPoll", () => {
 
 describe("pollFailed", () => {
   it("keeps what is on screen and says the server is unreachable", () => {
-    const up = applyPoll(initialState(), poll({ agents: [agent("a")], messages: [msg(1)] }));
+    const up = applyPoll(
+      initialState(),
+      poll({ agents: [agent("a")], messages: [msg(1)] }),
+    );
     const down = pollFailed(up, new Error("ECONNREFUSED"));
-    expect(down).toMatchObject({ connected: false, status: "server unreachable: ECONNREFUSED" });
+    expect(down).toMatchObject({
+      connected: false,
+      status: "server unreachable: ECONNREFUSED",
+    });
     expect(down.agents).toHaveLength(1);
     expect(down.stream).toHaveLength(1);
   });
@@ -118,7 +172,10 @@ describe("selection and views", () => {
   });
 
   it("changing agent clears the per-agent panes so the old agent's mail is not shown for the new one", () => {
-    let s = applyPoll(three(), poll({ agents: fleet, inbox: [msg(1)], reports: [] }));
+    let s = applyPoll(
+      three(),
+      poll({ agents: fleet, inbox: [msg(1)], reports: [] }),
+    );
     expect(s.inbox).toHaveLength(1);
     s = moveSelection(s, 1);
     expect(s.inbox).toEqual([]);
@@ -160,14 +217,19 @@ describe("formatting", () => {
   it("describes what an agent is doing from state and mailbox", () => {
     expect(activity(agent("a", { unread: 2 }))).toBe("working");
     expect(activity(agent("a"))).toBe("idle");
-    expect(activity(agent("a", { state: "pending", unread: 1 }))).toBe("waking");
+    expect(activity(agent("a", { state: "pending", unread: 1 }))).toBe(
+      "waking",
+    );
     expect(activity(agent("a", { state: "pending" }))).toBe("new");
     expect(activity(agent("a", { state: "suspended" }))).toBe("suspended");
     expect(activity(agent("a", { state: "retired" }))).toBe("retired");
   });
 
   it("lays the fleet out in aligned columns", () => {
-    const rows = fleetRows([agent("agent-1", { unread: 3 }), agent("a", { state: "suspended" })], NOW);
+    const rows = fleetRows(
+      [agent("agent-1", { unread: 3 }), agent("a", { state: "suspended" })],
+      NOW,
+    );
     expect(rows.map((r) => r.name)).toEqual(["agent-1", "a"]);
     expect(rows[0]!.line).toBe("agent-1  working      3   30s");
     expect(rows[1]!.line).toBe("a        suspended    0   30s");
@@ -186,8 +248,12 @@ describe("formatting", () => {
   });
 
   it("formats a message with sender, recipient, topic and work item in UTC", () => {
-    expect(formatMessage(msg(14, { body: "do\n  it", workItemId: 7 }))).toBe("12:03:05 #14 human > agent-1 (work item 7)  do it");
-    expect(formatMessage(msg(15, { from: "bob", to: "a", topic: "news" }))).toBe("12:03:05 #15 bob > a [news]  body 15");
+    expect(formatMessage(msg(14, { body: "do\n  it", workItemId: 7 }))).toBe(
+      "12:03:05 #14 human > agent-1 (work item 7)  do it",
+    );
+    expect(
+      formatMessage(msg(15, { from: "bob", to: "a", topic: "news" })),
+    ).toBe("12:03:05 #15 bob > a [news]  body 15");
   });
 });
 
@@ -201,7 +267,13 @@ describe("paneLines", () => {
   });
 
   it("renders the active view's data", () => {
-    const s = applyPoll(initialState(), poll({ messages: [msg(1)], topics: [{ topic: "news", subscribers: ["a", "b"] }] }));
+    const s = applyPoll(
+      initialState(),
+      poll({
+        messages: [msg(1)],
+        topics: [{ topic: "news", subscribers: ["a", "b"] }],
+      }),
+    );
     expect(paneLines(s)).toEqual([formatMessage(msg(1))]);
     expect(paneLines({ ...s, view: "topics" })).toEqual(["news  ←  a, b"]);
   });

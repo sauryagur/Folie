@@ -22,8 +22,12 @@ describe("callUnary trace propagation", () => {
   it("sends the active span as traceparent gRPC metadata, so ax and Substrate calls join the trace", async () => {
     const { client, seen } = recordingClient();
     await withSpan(tracer, "grpc-parent", {}, async (span) => {
-      expect(await callUnary(client, "Echo", { x: 1 })).toEqual({ echoed: { x: 1 } });
-      expect(seen.md!.get("traceparent")).toEqual([`00-${span.spanContext().traceId}-${span.spanContext().spanId}-01`]);
+      expect(await callUnary(client, "Echo", { x: 1 })).toEqual({
+        echoed: { x: 1 },
+      });
+      expect(seen.md!.get("traceparent")).toEqual([
+        `00-${span.spanContext().traceId}-${span.spanContext().spanId}-01`,
+      ]);
     });
   });
 
@@ -34,6 +38,8 @@ describe("callUnary trace propagation", () => {
   });
 
   it("rejects an unknown method by name", () => {
-    expect(() => callUnary(recordingClient().client, "Nope", {})).toThrow(/no method Nope/);
+    expect(() => callUnary(recordingClient().client, "Nope", {})).toThrow(
+      /no method Nope/,
+    );
   });
 });

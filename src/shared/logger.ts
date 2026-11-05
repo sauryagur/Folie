@@ -13,16 +13,28 @@ export interface LogSink {
   err(line: string): void;
 }
 
-const consoleSink: LogSink = { out: (l) => console.log(l), err: (l) => console.error(l) };
+const consoleSink: LogSink = {
+  out: (l) => console.log(l),
+  err: (l) => console.error(l),
+};
 
 /**
  * One JSON object per line: `ts`, `level`, `msg`, the fixed fields, and, when a span is active, its
  * `trace_id` and `span_id`, so a collector (or the TUI) can join log lines to traces without parsing text.
  * Stdout carries `info`, stderr carries `error`.
  */
-export function jsonLogger(fields: Record<string, unknown> = {}, sink: LogSink = consoleSink): StructuredLogger {
+export function jsonLogger(
+  fields: Record<string, unknown> = {},
+  sink: LogSink = consoleSink,
+): StructuredLogger {
   const write = (level: "info" | "error", args: unknown[]) => {
-    const line = JSON.stringify({ ts: new Date().toISOString(), level, msg: format(...args), ...fields, ...activeSpanIds() });
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      level,
+      msg: format(...args),
+      ...fields,
+      ...activeSpanIds(),
+    });
     (level === "error" ? sink.err : sink.out)(line);
   };
   return {

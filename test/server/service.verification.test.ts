@@ -13,7 +13,8 @@ let reset: () => Promise<void>;
 const mem = memoryTelemetry();
 let service: SwarmService;
 const op = { kind: "operator", name: "operator" } as const;
-const asAgent = (name: string) => ({ kind: "agent", name, generation: 1, executionId: "test-exec" }) as const;
+const asAgent = (name: string) =>
+  ({ kind: "agent", name, generation: 1, executionId: "test-exec" }) as const;
 
 beforeAll(async () => {
   ({ db, store, reset } = await testStore());
@@ -26,25 +27,59 @@ const setupTask = async () => {
   await service.registerAgent("a");
   await service.registerAgent("b");
   const { workItem } = await service.submitGoal({ goal: "g", to: "a" }, op);
-  const t = await service.proposeTask({ agent: "a", workItemId: workItem.id, title: "sub", spec: {} }, asAgent("a"));
+  const t = await service.proposeTask(
+    { agent: "a", workItemId: workItem.id, title: "sub", spec: {} },
+    asAgent("a"),
+  );
   const c = await service.claimTask({ agent: "a", taskId: t.id }, asAgent("a"));
-  await service.startTask({ agent: "a", taskId: t.id, fence: c.fence }, asAgent("a"));
-  const s = await service.submitTask({ agent: "a", taskId: t.id, fence: c.fence, result: { ok: true } }, asAgent("a"));
+  await service.startTask(
+    { agent: "a", taskId: t.id, fence: c.fence },
+    asAgent("a"),
+  );
+  const s = await service.submitTask(
+    { agent: "a", taskId: t.id, fence: c.fence, result: { ok: true } },
+    asAgent("a"),
+  );
   return { workItem, task: s };
 };
 
 describe("verification contracts", () => {
   it("rejects self-verification and never marks completed without independent verdicts", async () => {
     const { workItem, task } = await setupTask();
-    const v = await service.requestVerification({ taskId: task.id, check: "result-present", verifier: "b" }, op);
+    const v = await service.requestVerification(
+      { taskId: task.id, check: "result-present", verifier: "b" },
+      op,
+    );
     expect(v).toMatchObject({ status: "pending", required: true });
 
     // The producer cannot be the verifier.
-    await expect(service.recordVerdict({ verificationId: v.id, verifier: "a", verdict: "pass", confidence: 0.9, evidence: [] }, op)).rejects.toBeInstanceOf(ValidationError);
+    await expect(
+      service.recordVerdict(
+        {
+          verificationId: v.id,
+          verifier: "a",
+          verdict: "pass",
+          confidence: 0.9,
+          evidence: [],
+        },
+        op,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
 
     // Independent pass completes, then the task may move submitted->completed.
-    await service.recordVerdict({ verificationId: v.id, verifier: "b", verdict: "pass", confidence: 0.9, evidence: ["r1"] }, op);
-    const t = (await db.query("SELECT status FROM tasks WHERE id = $1", [task.id])).rows[0];
+    await service.recordVerdict(
+      {
+        verificationId: v.id,
+        verifier: "b",
+        verdict: "pass",
+        confidence: 0.9,
+        evidence: ["r1"],
+      },
+      op,
+    );
+    const t = (
+      await db.query("SELECT status FROM tasks WHERE id = $1", [task.id])
+    ).rows[0];
     expect(t).toMatchObject({ status: "submitted" });
 
     // Goal evaluation is a separate gate: no verified task, no achieved.
@@ -54,7 +89,21 @@ describe("verification contracts", () => {
 
   it("rejects verdicts from unknown verifiers and can't force pass without evidence", async () => {
     const { task } = await setupTask();
-    const v = await service.requestVerification({ taskId: task.id, check: "x", verifier: "b" }, op);
-    await expect(service.recordVerdict({ verificationId: v.id, verifier: "b", verdict: "pass", confidence: 1.1, evidence: [] }, op)).rejects.toBeInstanceOf(ValidationError);
+    const v = await service.requestVerification(
+      { taskId: task.id, check: "x", verifier: "b" },
+      op,
+    );
+    await expect(
+      service.recordVerdict(
+        {
+          verificationId: v.id,
+          verifier: "b",
+          verdict: "pass",
+          confidence: 1.1,
+          evidence: [],
+        },
+        op,
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
   });
 });

@@ -8,11 +8,11 @@ Today an agent's memory is files in `/workspace`, which `DeleteTask` destroys; a
 
 ## Options
 
-| Option | For | Against |
-| --- | --- | --- |
-| A. Files in the workspace (today) | Simple; agents already use them | Destroyed on retirement or loss; no provenance, ACL or sharing |
-| B. Summarize transcripts into a rolling memory | Easy to build | Compounding summarization loss; no provenance; contamination across goals |
-| C. A vector store only | Good semantic recall | Opaque; poor provenance and ACL; contradiction handling absent |
+| Option                                                                                                                             | For                                                                                           | Against                                                                                                                       |
+| ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| A. Files in the workspace (today)                                                                                                  | Simple; agents already use them                                                               | Destroyed on retirement or loss; no provenance, ACL or sharing                                                                |
+| B. Summarize transcripts into a rolling memory                                                                                     | Easy to build                                                                                 | Compounding summarization loss; no provenance; contamination across goals                                                     |
+| C. A vector store only                                                                                                             | Good semantic recall                                                                          | Opaque; poor provenance and ACL; contradiction handling absent                                                                |
 | D. **Scoped, immutable entries with provenance and links, in Postgres (full-text first), plus a content-addressed artifact store** | Auditable; scope and ACL enforced in one query path; consistent with the single-writer design | Retrieval quality is only as good as full-text until embeddings are justified ([OQ4](README.md#open-architectural-questions)) |
 
 ## Decision

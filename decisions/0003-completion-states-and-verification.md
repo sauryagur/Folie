@@ -8,12 +8,12 @@ Today `done` means the agent reported done (D5), and any `done` report settles e
 
 ## Options
 
-| Option | For | Against |
-| --- | --- | --- |
-| A. Trust the report (today) | Trivial | Unsound |
-| B. One universal verifier agent | One mechanism | An LLM grading an LLM; no domain grounding; one failure mode for everything |
-| C. Deterministic checks only | Strong where available | Cannot judge a literature review or an informal proof |
-| D. **Contract with deterministic and independent-review and human checks, independence enforced by the runtime, confidence reported** | Domain-appropriate; auditable; degrades honestly | More machinery; reviewers cost tokens |
+| Option                                                                                                                                | For                                              | Against                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- |
+| A. Trust the report (today)                                                                                                           | Trivial                                          | Unsound                                                                     |
+| B. One universal verifier agent                                                                                                       | One mechanism                                    | An LLM grading an LLM; no domain grounding; one failure mode for everything |
+| C. Deterministic checks only                                                                                                          | Strong where available                           | Cannot judge a literature review or an informal proof                       |
+| D. **Contract with deterministic and independent-review and human checks, independence enforced by the runtime, confidence reported** | Domain-appropriate; auditable; degrades honestly | More machinery; reviewers cost tokens                                       |
 
 ## Decision
 

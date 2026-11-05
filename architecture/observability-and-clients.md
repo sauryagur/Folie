@@ -4,26 +4,26 @@ Status: **target architecture**; today's tracing, metrics, logs, OTLP gateway an
 
 ## OpenTelemetry
 
-**Role.** OTel is the *observability layer*: it explains and correlates. Postgres, the event ledger and `session_events` are the record (Invariant 8). A dropped span loses a picture, never a fact. Consequences that are rules: no state is derived from telemetry; every id a trace needs is stored on rows (trace context columns exist on messages and work items today and extend to tasks, claims, invocations, verification jobs, ledger events); sampling and export failures never affect behaviour.
+**Role.** OTel is the _observability layer_: it explains and correlates. Postgres, the event ledger and `session_events` are the record (Invariant 8). A dropped span loses a picture, never a fact. Consequences that are rules: no state is derived from telemetry; every id a trace needs is stored on rows (trace context columns exist on messages and work items today and extend to tasks, claims, invocations, verification jobs, ledger events); sampling and export failures never affect behaviour.
 
 ### Correlation identifiers
 
 Attributes on spans, and on log lines where applicable. Metrics use a restricted subset ([cardinality](#metrics)).
 
-| Concept | Attribute | Notes |
-| --- | --- | --- |
-| Swarm | `folie.swarm.id` | |
-| Goal | `folie.goal.id`, `folie.goal.revision` | |
-| Task | `folie.task.id`, `folie.task.attempt`, `folie.task.fence`, `folie.task.kind` | fence on claim-scoped spans: a stale writer is visible in the trace |
-| Agent | `folie.agent.name` | today `agent_name`; dual-written for one release |
-| Session | `folie.session.id`, `folie.session.scope`, `folie.session.kind` (`work` `plan` `verify` `triage` `team` `consolidation`) | `session.id` exists as `session.id` today |
-| Execution | `folie.execution.id`, `folie.execution.epoch`, `folie.provider` | |
-| Harness | `folie.harness.id`, `folie.harness.version` | |
-| Model request | `gen_ai.*` per the OTel GenAI semantic conventions (operation, provider, request/response model, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`) plus `folie.llm.cost_usd`, `folie.llm.cost_basis` | Today `llm.usage.*`; migrate when the conventions are stable enough ([OQ8](../decisions/README.md#open-architectural-questions)); both names are written during the transition |
-| Tool invocation | `folie.tool.name`, `folie.tool.version`, `folie.tool.risk`, `folie.invocation.id`, `folie.tool.replayable` | |
-| Artifact | `folie.artifact.id`, `folie.artifact.sha256` | |
-| Team, verification, approval | `folie.team.id`, `folie.verification.id`, `folie.approval.id` | |
-| Work item (today) | `work_item_id` | maps to task; dual-written until the migration completes |
+| Concept                      | Attribute                                                                                                                                                                                                     | Notes                                                                                                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Swarm                        | `folie.swarm.id`                                                                                                                                                                                              |                                                                                                                                                                                |
+| Goal                         | `folie.goal.id`, `folie.goal.revision`                                                                                                                                                                        |                                                                                                                                                                                |
+| Task                         | `folie.task.id`, `folie.task.attempt`, `folie.task.fence`, `folie.task.kind`                                                                                                                                  | fence on claim-scoped spans: a stale writer is visible in the trace                                                                                                            |
+| Agent                        | `folie.agent.name`                                                                                                                                                                                            | today `agent_name`; dual-written for one release                                                                                                                               |
+| Session                      | `folie.session.id`, `folie.session.scope`, `folie.session.kind` (`work` `plan` `verify` `triage` `team` `consolidation`)                                                                                      | `session.id` exists as `session.id` today                                                                                                                                      |
+| Execution                    | `folie.execution.id`, `folie.execution.epoch`, `folie.provider`                                                                                                                                               |                                                                                                                                                                                |
+| Harness                      | `folie.harness.id`, `folie.harness.version`                                                                                                                                                                   |                                                                                                                                                                                |
+| Model request                | `gen_ai.*` per the OTel GenAI semantic conventions (operation, provider, request/response model, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`) plus `folie.llm.cost_usd`, `folie.llm.cost_basis` | Today `llm.usage.*`; migrate when the conventions are stable enough ([OQ8](../decisions/README.md#open-architectural-questions)); both names are written during the transition |
+| Tool invocation              | `folie.tool.name`, `folie.tool.version`, `folie.tool.risk`, `folie.invocation.id`, `folie.tool.replayable`                                                                                                    |                                                                                                                                                                                |
+| Artifact                     | `folie.artifact.id`, `folie.artifact.sha256`                                                                                                                                                                  |                                                                                                                                                                                |
+| Team, verification, approval | `folie.team.id`, `folie.verification.id`, `folie.approval.id`                                                                                                                                                 |                                                                                                                                                                                |
+| Work item (today)            | `work_item_id`                                                                                                                                                                                                | maps to task; dual-written until the migration completes                                                                                                                       |
 
 ### Trace structure: episodes linked, not one trace per goal
 
@@ -50,35 +50,35 @@ Episode roots: goal submission, goal revision, each task attempt (claim to settl
 
 Existing spans ([observability today](current-system.md#observability)) are kept: `folie.http.request`, `folie.dispatch`, `folie.controller.wake`, `folie.sandbox.init`, `folie.agent.session`, `folie.turn`, `folie.tool.<name>`, `folie.report.settle`, `folie.message.send`, `folie.topic.publish`; `folie.work_item.submit` is renamed `folie.goal.submit` when goals land. New:
 
-| Span | Made by | Parent / link | Key attributes |
-| --- | --- | --- | --- |
-| `folie.goal.submit`, `.revise`, `.evaluate`, `.pause` | server | caller; link to prior episode | goal, revision, verdict |
-| `folie.task.propose`, `.accept`, `.claim`, `.submit`, `.release`, `.revoke` | server | caller span (an agent's tool call); `claim` links to the nomination | task, fence, attempt, source, `folie.conflict` (lost race) |
-| `folie.task.nominate` | server | the `available` transition | round, K, candidates |
-| `folie.lease.sweep` | leader | root | expired count |
-| `folie.negotiate.offer`, `.bid`, `.handoff` | server | caller | offer id, ttl, outcome |
-| `folie.team.form`, `.join`, `.dissolve` | server | caller | team, members |
-| `folie.verify.run`, `folie.verify.check`, `folie.verify.review` | server / verifier | task submit; verify task session | kind, adapter, result, confidence, independence |
-| `folie.gateway.invoke`, `folie.policy.evaluate`, `folie.budget.reserve`, `folie.approval.decide` | server | caller | risk, effect, rule, policy version, headroom |
-| `folie.execution.ensure`, `.start`, `.suspend`, `.terminate`, `folie.reconcile.pass` | server | wake or reconciler | provider, phase |
-| `folie.context.assemble` | server/shim | session | items, tokens, dropped |
-| `folie.memory.query`, `.write` | server | session | scope, hits |
+| Span                                                                                             | Made by           | Parent / link                                                       | Key attributes                                             |
+| ------------------------------------------------------------------------------------------------ | ----------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `folie.goal.submit`, `.revise`, `.evaluate`, `.pause`                                            | server            | caller; link to prior episode                                       | goal, revision, verdict                                    |
+| `folie.task.propose`, `.accept`, `.claim`, `.submit`, `.release`, `.revoke`                      | server            | caller span (an agent's tool call); `claim` links to the nomination | task, fence, attempt, source, `folie.conflict` (lost race) |
+| `folie.task.nominate`                                                                            | server            | the `available` transition                                          | round, K, candidates                                       |
+| `folie.lease.sweep`                                                                              | leader            | root                                                                | expired count                                              |
+| `folie.negotiate.offer`, `.bid`, `.handoff`                                                      | server            | caller                                                              | offer id, ttl, outcome                                     |
+| `folie.team.form`, `.join`, `.dissolve`                                                          | server            | caller                                                              | team, members                                              |
+| `folie.verify.run`, `folie.verify.check`, `folie.verify.review`                                  | server / verifier | task submit; verify task session                                    | kind, adapter, result, confidence, independence            |
+| `folie.gateway.invoke`, `folie.policy.evaluate`, `folie.budget.reserve`, `folie.approval.decide` | server            | caller                                                              | risk, effect, rule, policy version, headroom               |
+| `folie.execution.ensure`, `.start`, `.suspend`, `.terminate`, `folie.reconcile.pass`             | server            | wake or reconciler                                                  | provider, phase                                            |
+| `folie.context.assemble`                                                                         | server/shim       | session                                                             | items, tokens, dropped                                     |
+| `folie.memory.query`, `.write`                                                                   | server            | session                                                             | scope, hits                                                |
 
 Rule for waits that outlast a span: **record a span event at request time and open a new linked span at the decision** (an approval requested Monday and decided Tuesday is two spans and a link, never one span open for a day).
 
 ### Propagation across boundaries
 
-| Boundary | Carrier | Status |
-| --- | --- | --- |
-| client → server, agent → server | `traceparent`/`tracestate` HTTP headers | today |
-| server → ax, Substrate | gRPC metadata | today |
-| message / delivery | `traceparent`, `tracestate` columns | today; extends to `publications` |
-| task, claim, verification job, invocation, approval, ledger event | the same two columns, written in the creating transaction | new |
-| wake → session | unread deliveries re-traced to `sandbox.init`; the session is its child | today |
-| server → agent shim | the `control` response and `task_assigned` delivery carry the context | new |
-| shim → harness | in-process: active context; out-of-process harness: `traceparent` in the JSON-RPC `start` request and env | new |
-| gateway → tool provider | `InvocationContext.trace` → HTTP header / JSON-RPC field | new |
-| ledger → SSE → clients and extensions | `traceparent` on every event frame | new |
+| Boundary                                                          | Carrier                                                                                                   | Status                           |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| client → server, agent → server                                   | `traceparent`/`tracestate` HTTP headers                                                                   | today                            |
+| server → ax, Substrate                                            | gRPC metadata                                                                                             | today                            |
+| message / delivery                                                | `traceparent`, `tracestate` columns                                                                       | today; extends to `publications` |
+| task, claim, verification job, invocation, approval, ledger event | the same two columns, written in the creating transaction                                                 | new                              |
+| wake → session                                                    | unread deliveries re-traced to `sandbox.init`; the session is its child                                   | today                            |
+| server → agent shim                                               | the `control` response and `task_assigned` delivery carry the context                                     | new                              |
+| shim → harness                                                    | in-process: active context; out-of-process harness: `traceparent` in the JSON-RPC `start` request and env | new                              |
+| gateway → tool provider                                           | `InvocationContext.trace` → HTTP header / JSON-RPC field                                                  | new                              |
+| ledger → SSE → clients and extensions                             | `traceparent` on every event frame                                                                        | new                              |
 
 Sandboxes still send telemetry only through folie-server's OTLP gateway (Decision 15); that does not change.
 
@@ -86,28 +86,28 @@ Sandboxes still send telemetry only through folie-server's OTLP gateway (Decisio
 
 Low-cardinality by rule. **Allowed labels**: `agent_name` (bounded by fleet size), `capability`, `tool.name`, `outcome`, `risk_class`, `verification.kind`, `session.kind`, `reason`, `provider`, `dim`. **Forbidden as labels**: `task_id`, `goal_id`, `session_id`, message ids (use traces and exemplars to jump from a metric to an episode). Each metric method is added to the `Metrics` port deliberately.
 
-| Metric | Type | Answers |
-| --- | --- | --- |
-| `folie.goal.outcome{outcome}` | counter | goal completion rate: `achieved / (achieved + failed + cancelled)` |
-| `folie.task.transition{from,to}` | counter | flow, retry and failure rates |
-| `folie.task.verified` / `folie.task.failed{reason}` | counter | **verified task completion rate**, the primary success metric (not reported completion) |
-| `folie.task.claim.latency` | histogram | time `available → claimed` (discovery effectiveness) |
-| `folie.task.time_to_verified` | histogram | time `accepted → verified` |
-| `folie.agent.utilization` | gauge | fraction of alive time in a running session |
-| `folie.message.delivery.latency`, `folie.inbox.latency` (today), `folie.inbox.depth` (today) | histogram, gauge | message delivery latency (create → leased); latency to ack |
-| `folie.coordination.overhead` | derived | cost and tokens in sessions of kind `plan`, `triage`, `team`, `verify` over total, from `folie.llm.cost{session.kind}`; plus messages per verified task |
-| `folie.llm.tokens`, `folie.llm.cost{cost_basis}` (today, `type` and `agent_name`) | counter | model cost, by basis |
-| `folie.tool.calls`, `folie.tool.failures` (today); `folie.gateway.invocation{risk_class,state}` | counter | tool cost and failure; external effects |
-| `folie.task.retry{reason}` | counter | retry rate by cause (lease expiry, environment, verification) |
-| `folie.verification.result{verification.kind,result}` | counter | **verification rejection rate**; `errored` separately |
-| `folie.verification.false_accept{verification.kind}` | counter | canary and audit-sample misses ([protocols §8](../spec/protocols.md#8-verification)) |
-| `folie.recovery.time{kind}` (`lease`, `execution`, `session`) | histogram | **time to recover**: detection of loss to the work resuming under a new holder |
-| `folie.budget.utilization{dim}`, `folie.budget.exhausted{dim}`, `folie.budget.overrun{dim}` | gauge, counters | consumption and enforcement quality |
-| `folie.policy.decision{effect,risk_class}`, `folie.policy.attempt_denied{action}` | counter | policy violations and unauthorized attempts |
-| `folie.proposal{outcome}` (`accepted`, `duplicate`, `rejected`, `quota`) | counter | duplicate-work and runaway pressure |
-| `folie.stall.detected{kind}` | counter | no-progress detections |
-| `folie.execution.state{state}`, `folie.execution.lost`, `folie.publication.undelivered` | gauge, counters | infrastructure health |
-| `folie.session.outcome` (today) | counter | session settlement by outcome |
+| Metric                                                                                          | Type             | Answers                                                                                                                                                 |
+| ----------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `folie.goal.outcome{outcome}`                                                                   | counter          | goal completion rate: `achieved / (achieved + failed + cancelled)`                                                                                      |
+| `folie.task.transition{from,to}`                                                                | counter          | flow, retry and failure rates                                                                                                                           |
+| `folie.task.verified` / `folie.task.failed{reason}`                                             | counter          | **verified task completion rate**, the primary success metric (not reported completion)                                                                 |
+| `folie.task.claim.latency`                                                                      | histogram        | time `available → claimed` (discovery effectiveness)                                                                                                    |
+| `folie.task.time_to_verified`                                                                   | histogram        | time `accepted → verified`                                                                                                                              |
+| `folie.agent.utilization`                                                                       | gauge            | fraction of alive time in a running session                                                                                                             |
+| `folie.message.delivery.latency`, `folie.inbox.latency` (today), `folie.inbox.depth` (today)    | histogram, gauge | message delivery latency (create → leased); latency to ack                                                                                              |
+| `folie.coordination.overhead`                                                                   | derived          | cost and tokens in sessions of kind `plan`, `triage`, `team`, `verify` over total, from `folie.llm.cost{session.kind}`; plus messages per verified task |
+| `folie.llm.tokens`, `folie.llm.cost{cost_basis}` (today, `type` and `agent_name`)               | counter          | model cost, by basis                                                                                                                                    |
+| `folie.tool.calls`, `folie.tool.failures` (today); `folie.gateway.invocation{risk_class,state}` | counter          | tool cost and failure; external effects                                                                                                                 |
+| `folie.task.retry{reason}`                                                                      | counter          | retry rate by cause (lease expiry, environment, verification)                                                                                           |
+| `folie.verification.result{verification.kind,result}`                                           | counter          | **verification rejection rate**; `errored` separately                                                                                                   |
+| `folie.verification.false_accept{verification.kind}`                                            | counter          | canary and audit-sample misses ([protocols §8](../spec/protocols.md#8-verification))                                                                    |
+| `folie.recovery.time{kind}` (`lease`, `execution`, `session`)                                   | histogram        | **time to recover**: detection of loss to the work resuming under a new holder                                                                          |
+| `folie.budget.utilization{dim}`, `folie.budget.exhausted{dim}`, `folie.budget.overrun{dim}`     | gauge, counters  | consumption and enforcement quality                                                                                                                     |
+| `folie.policy.decision{effect,risk_class}`, `folie.policy.attempt_denied{action}`               | counter          | policy violations and unauthorized attempts                                                                                                             |
+| `folie.proposal{outcome}` (`accepted`, `duplicate`, `rejected`, `quota`)                        | counter          | duplicate-work and runaway pressure                                                                                                                     |
+| `folie.stall.detected{kind}`                                                                    | counter          | no-progress detections                                                                                                                                  |
+| `folie.execution.state{state}`, `folie.execution.lost`, `folie.publication.undelivered`         | gauge, counters  | infrastructure health                                                                                                                                   |
+| `folie.session.outcome` (today)                                                                 | counter          | session settlement by outcome                                                                                                                           |
 
 Metrics remain **derived by folie-server** from state transitions and reports/events (agents export none), counted once per stored row so resends do not double-count (today's rule).
 
@@ -133,17 +133,17 @@ Span events and the attributes above support questions the evaluation asks witho
 
 **Views** (all backed by documented API routes; all are required by R-15.6):
 
-| View | Shows | Actions | State |
-| --- | --- | --- | --- |
-| ● **Fleet** (today's grid, extended) | agents: status, execution state, harness and model, current goal and task, session state, spend, last activity, alerts | suspend, resume, pause, retire, credentials rotate, message | exists; needs extension |
-| ● **Goals** | goals with status, progress (verified / total tasks), spend vs budget, blockers, stall flags, acceptance criteria and their verification status, artifacts, revision history | submit, revise, pause, resume, cancel, request evaluation, approve | new |
-| ● **Tasks** | the goal's graph (list and dependency view), status, owner and fence, lease remaining, attempts, participants, verification checks, history | propose, accept, reject, offer, revoke, take over, cancel, supersede, edit plan (`plan.change`) | new |
-| ● **Comms** (today's stream, inbox, topics) | direct, topic, goal, task and team channels; per-agent inbox with delivery state and priority | send, urgent, publish, subscribe | exists; needs extension |
-| ● **Execution inspector** | selected agent's executions, sessions and transcript (turns, tool calls, steers, logs), harness details, usage, checkpoints, trace id (copyable) | cancel session, steer, open trace | new (transcript view absent today) |
-| ● **Approvals** | pending approvals (goal activation, final acceptance, human checks; tool approvals), what exactly is being approved (args, diff, risk class), requester, deadline | approve, reject, delegate | new |
-| ○ **Policy** | policies, grants, budgets, revocations, audit history, trust profiles | edit (admin), revoke | new |
-| ○ **Teams and capabilities** | teams, members, notes; agent capability levels and evidence | dissolve, assess, revoke | new |
-| ○ **Coordination analysis** | claim latency, negotiation, overhead, mechanism switches | toggle experiments | new |
+| View                                        | Shows                                                                                                                                                                        | Actions                                                                                         | State                              |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------- |
+| ● **Fleet** (today's grid, extended)        | agents: status, execution state, harness and model, current goal and task, session state, spend, last activity, alerts                                                       | suspend, resume, pause, retire, credentials rotate, message                                     | exists; needs extension            |
+| ● **Goals**                                 | goals with status, progress (verified / total tasks), spend vs budget, blockers, stall flags, acceptance criteria and their verification status, artifacts, revision history | submit, revise, pause, resume, cancel, request evaluation, approve                              | new                                |
+| ● **Tasks**                                 | the goal's graph (list and dependency view), status, owner and fence, lease remaining, attempts, participants, verification checks, history                                  | propose, accept, reject, offer, revoke, take over, cancel, supersede, edit plan (`plan.change`) | new                                |
+| ● **Comms** (today's stream, inbox, topics) | direct, topic, goal, task and team channels; per-agent inbox with delivery state and priority                                                                                | send, urgent, publish, subscribe                                                                | exists; needs extension            |
+| ● **Execution inspector**                   | selected agent's executions, sessions and transcript (turns, tool calls, steers, logs), harness details, usage, checkpoints, trace id (copyable)                             | cancel session, steer, open trace                                                               | new (transcript view absent today) |
+| ● **Approvals**                             | pending approvals (goal activation, final acceptance, human checks; tool approvals), what exactly is being approved (args, diff, risk class), requester, deadline            | approve, reject, delegate                                                                       | new                                |
+| ○ **Policy**                                | policies, grants, budgets, revocations, audit history, trust profiles                                                                                                        | edit (admin), revoke                                                                            | new                                |
+| ○ **Teams and capabilities**                | teams, members, notes; agent capability levels and evidence                                                                                                                  | dissolve, assess, revoke                                                                        | new                                |
+| ○ **Coordination analysis**                 | claim latency, negotiation, overhead, mechanism switches                                                                                                                     | toggle experiments                                                                              | new                                |
 
 **Human interaction flows** (required, R-15.6): submit a goal with acceptance criteria and a budget → watch the graph form → read a session transcript when something looks wrong → intervene (message, pause, revoke a claim, take a task over) → approve the final acceptance. Every flow is also a `folie …` CLI command and an API call, so scripts and future clients get parity without a second implementation.
 

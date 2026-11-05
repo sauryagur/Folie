@@ -1,5 +1,14 @@
 #!/usr/bin/env bun
-import { agents, publish, status, submit, subscribe, topics, unsubscribe, type Api } from "./cli/commands";
+import {
+  agents,
+  publish,
+  status,
+  submit,
+  subscribe,
+  topics,
+  unsubscribe,
+  type Api,
+} from "./cli/commands";
 import { down, up } from "./host/cluster";
 import { operatorTokenFromEnvOrFile, withServerUrl } from "./host/portforward";
 import { FolieClient } from "./shared/client";
@@ -7,14 +16,25 @@ import { FolieClient } from "./shared/client";
 type Command = (args: string[]) => Promise<number | void>;
 
 function operatorClient(url: string): FolieClient {
-  const token = process.env.FOLIE_OPERATOR_TOKEN ?? operatorTokenFromEnvOrFile();
-  if (!token) throw new Error("FOLIE_OPERATOR_TOKEN is required for CLI/TUI. Set it to the operator credential (see `folie up`).");
+  const token =
+    process.env.FOLIE_OPERATOR_TOKEN ?? operatorTokenFromEnvOrFile();
+  if (!token)
+    throw new Error(
+      "FOLIE_OPERATOR_TOKEN is required for CLI/TUI. Set it to the operator credential (see `folie up`).",
+    );
   return new FolieClient(url, fetch, token);
 }
 
 const viaServer =
-  (cmd: (api: Api, args: string[], out: (l: string) => void) => Promise<number>): Command =>
-  (args) => withServerUrl((url) => cmd(operatorClient(url), args, console.log));
+  (
+    cmd: (
+      api: Api,
+      args: string[],
+      out: (l: string) => void,
+    ) => Promise<number>,
+  ): Command =>
+  (args) =>
+    withServerUrl((url) => cmd(operatorClient(url), args, console.log));
 
 const commands: Record<string, Command> = {
   up,
@@ -39,7 +59,9 @@ const tui: Command = () =>
 
 const command = name === undefined ? tui : commands[name];
 if (!command) {
-  console.error(`usage: folie [${Object.keys(commands).join("|")}]   (no arguments: open the TUI)`);
+  console.error(
+    `usage: folie [${Object.keys(commands).join("|")}]   (no arguments: open the TUI)`,
+  );
   process.exit(2);
 }
 try {

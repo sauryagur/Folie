@@ -19,24 +19,54 @@ async function dockerEnv() {
 }
 
 async function compile(entry: string, out: string) {
-  await must([process.execPath, "build", "--compile", "--target=bun-linux-x64", entry, "--outfile", out], { cwd: REPO });
+  await must(
+    [
+      process.execPath,
+      "build",
+      "--compile",
+      "--target=bun-linux-x64",
+      entry,
+      "--outfile",
+      out,
+    ],
+    { cwd: REPO },
+  );
 }
 
-async function buildAndPush(name: string, dockerfile: string, buildArgs: string[] = []): Promise<string> {
+async function buildAndPush(
+  name: string,
+  dockerfile: string,
+  buildArgs: string[] = [],
+): Promise<string> {
   const env = await dockerEnv();
   const tag = `${REGISTRY}/${name}:dev`;
-  await must(["docker", "build", "-q", "-t", tag, "-f", dockerfile, ...buildArgs, "."], { cwd: REPO, env });
+  await must(
+    ["docker", "build", "-q", "-t", tag, "-f", dockerfile, ...buildArgs, "."],
+    { cwd: REPO, env },
+  );
   await must(["docker", "push", "-q", tag], { cwd: REPO, env });
-  const ref = await capture(["docker", "inspect", "--format={{index .RepoDigests 0}}", tag], { env });
+  const ref = await capture(
+    ["docker", "inspect", "--format={{index .RepoDigests 0}}", tag],
+    { env },
+  );
   // Substrate only accepts digest-pinned images.
-  if (!ref.includes("@sha256:")) throw new Error(`no registry digest for ${tag}`);
+  if (!ref.includes("@sha256:"))
+    throw new Error(`no registry digest for ${tag}`);
   return ref;
 }
 
 /** The task-runner image the cluster's ax-server runs tasks on; agents extend it. */
 async function axRunnerImage(): Promise<string> {
   const image = await capture(
-    kubectl("-n", "ax-system", "get", "deployment", "ax-server", "-o", "jsonpath={.spec.template.spec.containers[0].env[?(@.name=='AX_DEFAULT_TASK_IMAGE')].value}"),
+    kubectl(
+      "-n",
+      "ax-system",
+      "get",
+      "deployment",
+      "ax-server",
+      "-o",
+      "jsonpath={.spec.template.spec.containers[0].env[?(@.name=='AX_DEFAULT_TASK_IMAGE')].value}",
+    ),
   );
   if (!image) throw new Error("ax-server has no AX_DEFAULT_TASK_IMAGE");
   return image;
@@ -49,6 +79,9 @@ export async function buildImages(): Promise<ImageRefs> {
   const base = await axRunnerImage();
   return {
     server: await buildAndPush("folie-server", "deploy/Dockerfile.server"),
-    agent: await buildAndPush("folie-agent", "deploy/Dockerfile.agent", ["--build-arg", `BASE_IMAGE=${base}`]),
+    agent: await buildAndPush("folie-agent", "deploy/Dockerfile.agent", [
+      "--build-arg",
+      `BASE_IMAGE=${base}`,
+    ]),
   };
 }

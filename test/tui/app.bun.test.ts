@@ -7,7 +7,14 @@ import { createApp, type App, type AppDeps } from "../../src/tui/app";
 
 const NOW = Date.parse("2026-11-04T12:00:00Z");
 const msg = (id: number): Message => ({
-  id, from: "human", to: "agent-1", body: `goal ${id}`, workItemId: id, topic: null, createdAt: "2026-11-04T11:59:00Z", ackedAt: null,
+  id,
+  from: "human",
+  to: "agent-1",
+  body: `goal ${id}`,
+  workItemId: id,
+  topic: null,
+  createdAt: "2026-11-04T11:59:00Z",
+  ackedAt: null,
 });
 
 type Setup = Awaited<ReturnType<typeof createTestRenderer>>;
@@ -23,20 +30,51 @@ describe.skipIf(!process.versions.bun)("TUI app", () => {
     agents: async () => {
       if (failing) throw new Error("ECONNREFUSED");
       return [
-        { name: "agent-1", state: "running", wakeEpoch: 1, unread: 2, lastActiveAt: "2026-11-04T11:59:50Z" },
-        { name: "agent-2", state: "suspended", wakeEpoch: 3, unread: 0, lastActiveAt: "2026-11-04T11:50:00Z" },
+        {
+          name: "agent-1",
+          state: "running",
+          wakeEpoch: 1,
+          unread: 2,
+          lastActiveAt: "2026-11-04T11:59:50Z",
+        },
+        {
+          name: "agent-2",
+          state: "suspended",
+          wakeEpoch: 3,
+          unread: 0,
+          lastActiveAt: "2026-11-04T11:50:00Z",
+        },
       ];
     },
     messages: async () => [msg(1), msg(2)],
     topics: async () => [{ topic: "news", subscribers: ["agent-1"] }],
     inbox: async (a) => (calls.push(`inbox ${a}`), []),
     reports: async (q) => (calls.push(`reports ${q?.agent}`), []),
-    submitGoal: async (r) => (calls.push(`submit ${r.to ?? "-"} ${r.goal}`), { workItem: { id: 9, goal: r.goal, state: "queued", createdAt: "" }, message: null }),
-    send: async (r) => (calls.push(`send ${r.to} ${r.body}`), { id: 5, ...r, workItemId: null, topic: null, createdAt: "", ackedAt: null }),
+    submitGoal: async (r) => (
+      calls.push(`submit ${r.to ?? "-"} ${r.goal}`),
+      {
+        workItem: { id: 9, goal: r.goal, state: "queued", createdAt: "" },
+        message: null,
+      }
+    ),
+    send: async (r) => (
+      calls.push(`send ${r.to} ${r.body}`),
+      {
+        id: 5,
+        ...r,
+        workItemId: null,
+        topic: null,
+        createdAt: "",
+        ackedAt: null,
+      }
+    ),
     publish: async () => ({ delivered: 1 }),
     subscribe: async (t, r) => ({ topic: t, agent: r.agent }),
     unsubscribe: async (t, r) => ({ topic: t, agent: r.agent }),
-    agentOp: async (op, agent) => (calls.push(`${op} ${agent}`), { agent, state: "suspended" }),
+    agentOp: async (op, agent) => (
+      calls.push(`${op} ${agent}`),
+      { agent, state: "suspended" }
+    ),
   };
 
   /** Key handlers start promise chains (poll, command). The fakes resolve at once, so draining and painting is enough. */
@@ -51,8 +89,17 @@ describe.skipIf(!process.versions.bun)("TUI app", () => {
     quits = 0;
     failing = false;
     // Kitty keyboard encoding makes a lone Escape unambiguous, so it is delivered at once instead of after a hold-back timer.
-    setup = await createTestRenderer({ width: 110, height: 24, kittyKeyboard: true });
-    app = createApp(setup.renderer, { api, onQuit: () => void quits++, now: () => NOW, intervalMs: 60_000 });
+    setup = await createTestRenderer({
+      width: 110,
+      height: 24,
+      kittyKeyboard: true,
+    });
+    app = createApp(setup.renderer, {
+      api,
+      onQuit: () => void quits++,
+      now: () => NOW,
+      intervalMs: 60_000,
+    });
     await app.refresh();
     await settle();
   });
@@ -122,7 +169,9 @@ describe.skipIf(!process.versions.bun)("TUI app", () => {
     await settle();
     setup.mockInput.pressKey("r");
     await settle();
-    expect(calls).toEqual(expect.arrayContaining(["suspend agent-1", "resume agent-1"]));
+    expect(calls).toEqual(
+      expect.arrayContaining(["suspend agent-1", "resume agent-1"]),
+    );
   });
 
   it("Escape abandons a half-typed command, and keys work again afterwards", async () => {

@@ -10,12 +10,12 @@ Constraints: agents cannot be trusted to follow conventions; waking an agent cos
 
 ## Options
 
-| Option | For | Against |
-| --- | --- | --- |
-| A. Server push only (today) | Simple; deterministic; already built | No discovery, negotiation or self-organization; the server becomes the central planner the vision rejects |
-| B. Pull only (agents poll a board) | Simple and decentralised | Wasteful polling (every idle agent wakes to look); no ranking; slow discovery; thundering-herd claims |
-| C. Peer-to-peer negotiation with agent-run consensus | Maximally decentralised | Unenforceable (agents can lie or stall), race-prone, deadlock-prone, needs a trusted arbiter anyway |
-| D. **Hybrid:** runtime nominates a small ranked set, agents pull any time, runtime arbitrates every outcome by a conditional update | Cheap discovery; agent autonomy; deterministic ownership; the push path generalises today's dispatch | More moving parts than A; scoring needs tuning |
+| Option                                                                                                                              | For                                                                                                  | Against                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| A. Server push only (today)                                                                                                         | Simple; deterministic; already built                                                                 | No discovery, negotiation or self-organization; the server becomes the central planner the vision rejects |
+| B. Pull only (agents poll a board)                                                                                                  | Simple and decentralised                                                                             | Wasteful polling (every idle agent wakes to look); no ranking; slow discovery; thundering-herd claims     |
+| C. Peer-to-peer negotiation with agent-run consensus                                                                                | Maximally decentralised                                                                              | Unenforceable (agents can lie or stall), race-prone, deadlock-prone, needs a trusted arbiter anyway       |
+| D. **Hybrid:** runtime nominates a small ranked set, agents pull any time, runtime arbitrates every outcome by a conditional update | Cheap discovery; agent autonomy; deterministic ownership; the push path generalises today's dispatch | More moving parts than A; scoring needs tuning                                                            |
 
 ## Decision
 

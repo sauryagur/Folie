@@ -8,12 +8,12 @@ Status: proposed 2026-11-04. Revises Decision 3; extends Decisions 1 and 11. Spe
 
 ## Options
 
-| Option | For | Against |
-| --- | --- | --- |
-| A. Keep `Runtime` and `AxClient` as they are | No work | No cancel; Pi concepts leak; AX concepts in the domain |
-| B. Adopt an external agent protocol wholesale (for example MCP or ACP) as the harness contract | Existing ecosystem | None covers lease-aware cancel, usage granularity, replay policy, or session scoping; we would bend or fork it |
-| C. **Own small contract with capability flags, tool dispatch hosted by the shim, bound to JSON-RPC later** | Exactly what Folie needs; every harness inherits journal, tracing, replay and fencing | We own and version it |
-| D. Treat harness and execution as one "agent runtime" | Fewer interfaces | Cannot change harness without changing execution |
+| Option                                                                                                     | For                                                                                   | Against                                                                                                        |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| A. Keep `Runtime` and `AxClient` as they are                                                               | No work                                                                               | No cancel; Pi concepts leak; AX concepts in the domain                                                         |
+| B. Adopt an external agent protocol wholesale (for example MCP or ACP) as the harness contract             | Existing ecosystem                                                                    | None covers lease-aware cancel, usage granularity, replay policy, or session scoping; we would bend or fork it |
+| C. **Own small contract with capability flags, tool dispatch hosted by the shim, bound to JSON-RPC later** | Exactly what Folie needs; every harness inherits journal, tracing, replay and fencing | We own and version it                                                                                          |
+| D. Treat harness and execution as one "agent runtime"                                                      | Fewer interfaces                                                                      | Cannot change harness without changing execution                                                               |
 
 ## Decision
 

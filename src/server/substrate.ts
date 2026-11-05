@@ -32,16 +32,24 @@ export function allowAllWebPolicy(atespace: string, ports: WebPorts) {
 
 export function grpcEgressPolicies(opts: EgressPolicyOptions): EgressPolicies {
   const Control = loadService("ateapi.proto", ["ateapi", "Control"]);
-  const callCreds = grpc.credentials.createFromMetadataGenerator((_params, cb) => {
-    try {
-      const md = new grpc.Metadata();
-      md.set("authorization", `Bearer ${readFileSync(opts.tokenFile, "utf8").trim()}`);
-      cb(null, md);
-    } catch (e) {
-      cb(e as Error);
-    }
-  });
-  const creds = grpc.credentials.combineChannelCredentials(grpc.credentials.createSsl(readFileSync(opts.caFile)), callCreds);
+  const callCreds = grpc.credentials.createFromMetadataGenerator(
+    (_params, cb) => {
+      try {
+        const md = new grpc.Metadata();
+        md.set(
+          "authorization",
+          `Bearer ${readFileSync(opts.tokenFile, "utf8").trim()}`,
+        );
+        cb(null, md);
+      } catch (e) {
+        cb(e as Error);
+      }
+    },
+  );
+  const creds = grpc.credentials.combineChannelCredentials(
+    grpc.credentials.createSsl(readFileSync(opts.caFile)),
+    callCreds,
+  );
   const c = new Control(opts.address, creds, {
     "grpc.ssl_target_name_override": opts.authority,
     "grpc.default_authority": opts.authority,

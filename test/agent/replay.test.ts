@@ -1,9 +1,15 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { AUTO_REPLAY, RequestIds, attemptNotice, replayPolicy } from "../../src/agent/replay";
+import {
+  AUTO_REPLAY,
+  RequestIds,
+  attemptNotice,
+  replayPolicy,
+} from "../../src/agent/replay";
 import type { ToolAttempt } from "../../src/shared/types";
 
-const tool = (name: string, replay?: "safe" | "never") => ({ name, replay }) as unknown as AgentTool;
+const tool = (name: string, replay?: "safe" | "never") =>
+  ({ name, replay }) as unknown as AgentTool;
 
 describe("replayPolicy", () => {
   it("honours a tool's own declaration over any default", () => {
@@ -12,8 +18,12 @@ describe("replayPolicy", () => {
   });
 
   it("knows pi's coding tools: reads are safe, shell and writes are not", () => {
-    expect(["read", "grep", "find", "ls"].map((n) => replayPolicy(tool(n)))).toEqual(["safe", "safe", "safe", "safe"]);
-    expect(["bash", "edit", "write"].map((n) => replayPolicy(tool(n)))).toEqual(["never", "never", "never"]);
+    expect(
+      ["read", "grep", "find", "ls"].map((n) => replayPolicy(tool(n))),
+    ).toEqual(["safe", "safe", "safe", "safe"]);
+    expect(["bash", "edit", "write"].map((n) => replayPolicy(tool(n)))).toEqual(
+      ["never", "never", "never"],
+    );
   });
 
   it("treats an undeclared, unknown tool as unsafe to repeat", () => {
@@ -21,7 +31,11 @@ describe("replayPolicy", () => {
   });
 
   it("only auto-replays idempotent state setters", () => {
-    expect([...AUTO_REPLAY].sort()).toEqual(["artifact_register", "topic_subscribe", "topic_unsubscribe"]);
+    expect([...AUTO_REPLAY].sort()).toEqual([
+      "artifact_register",
+      "topic_subscribe",
+      "topic_unsubscribe",
+    ]);
   });
 });
 
@@ -29,12 +43,16 @@ describe("RequestIds", () => {
   it("is deterministic: a restarted session computes the same keys", () => {
     const a = new RequestIds("wi:3");
     const b = new RequestIds("wi:3");
-    expect(a.next("message_send", { to: "bob", body: "hi" })).toBe(b.next("message_send", { to: "bob", body: "hi" }));
+    expect(a.next("message_send", { to: "bob", body: "hi" })).toBe(
+      b.next("message_send", { to: "bob", body: "hi" }),
+    );
   });
 
   it("ignores argument key order", () => {
     const ids = new RequestIds("wi:3");
-    expect(ids.next("t", { a: 1, b: { c: 2, d: 3 } })).toBe(new RequestIds("wi:3").next("t", { b: { d: 3, c: 2 }, a: 1 }));
+    expect(ids.next("t", { a: 1, b: { c: 2, d: 3 } })).toBe(
+      new RequestIds("wi:3").next("t", { b: { d: 3, c: 2 }, a: 1 }),
+    );
   });
 
   it("differs by scope, tool and args", () => {
@@ -52,12 +70,23 @@ describe("RequestIds", () => {
     const [one, two] = [first.next("t", {}), first.next("t", {})];
     expect(one).not.toBe(two);
     const restarted = new RequestIds("wi:3");
-    expect([restarted.next("t", {}), restarted.next("t", {})]).toEqual([one, two]);
+    expect([restarted.next("t", {}), restarted.next("t", {})]).toEqual([
+      one,
+      two,
+    ]);
   });
 });
 
 describe("attemptNotice", () => {
-  const at = (over: Partial<ToolAttempt>): ToolAttempt => ({ sessionId: "s", callId: "1", tool: "message_send", replayable: false, args: { to: "bob" }, state: "done", ...over });
+  const at = (over: Partial<ToolAttempt>): ToolAttempt => ({
+    sessionId: "s",
+    callId: "1",
+    tool: "message_send",
+    replayable: false,
+    args: { to: "bob" },
+    state: "done",
+    ...over,
+  });
 
   it("is empty when the earlier attempt made no state-changing call", () => {
     expect(attemptNotice([])).toBe("");
@@ -65,13 +94,26 @@ describe("attemptNotice", () => {
   });
 
   it("lists each non-replayable call with its state, flagging the interrupted one", () => {
-    const text = attemptNotice([at({}), at({ callId: "2", tool: "bash", args: { command: "make" }, state: "failed" }), at({ callId: "3", state: "interrupted", args: { to: "carol" } })]);
+    const text = attemptNotice([
+      at({}),
+      at({
+        callId: "2",
+        tool: "bash",
+        args: { command: "make" },
+        state: "failed",
+      }),
+      at({ callId: "3", state: "interrupted", args: { to: "carol" } }),
+    ]);
     expect(text).toContain('message_send {"to":"bob"}: done');
     expect(text).toContain('bash {"command":"make"}: failed');
-    expect(text).toContain('message_send {"to":"carol"}: STARTED BUT NEVER FINISHED');
+    expect(text).toContain(
+      'message_send {"to":"carol"}: STARTED BUT NEVER FINISHED',
+    );
   });
 
   it("shortens huge arguments", () => {
-    expect(attemptNotice([at({ args: { blob: "x".repeat(5000) } })]).length).toBeLessThan(500);
+    expect(
+      attemptNotice([at({ args: { blob: "x".repeat(5000) } })]).length,
+    ).toBeLessThan(500);
   });
 });

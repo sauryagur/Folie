@@ -8,12 +8,12 @@ Decision 6 chose full-trust egress and tools for the first slice, with the brake
 
 ## Options
 
-| Option | For | Against |
-| --- | --- | --- |
-| A. Keep full trust everywhere | Zero friction | Exfiltration, key abuse and unmediated external effects are possible; not acceptable beyond a prototype |
-| B. Restrict sandbox tools by prompt or per-tool wrappers inside the sandbox | Cheap | Enforcement inside the thing being constrained; prompts are not a boundary |
-| C. **Keep the sandbox permissive by profile; route external effects and model calls through server-side gateways that hold credentials and enforce policy and budgets** | Enforcement outside agent reach; agents keep their autonomy over the sandbox; credentials never enter it | Gateway is on the path of every external effect; model streaming through a proxy is work |
-| D. Fully deny-by-default sandbox for everything | Strongest | Breaks most useful work (package installs, web reads) |
+| Option                                                                                                                                                                  | For                                                                                                      | Against                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| A. Keep full trust everywhere                                                                                                                                           | Zero friction                                                                                            | Exfiltration, key abuse and unmediated external effects are possible; not acceptable beyond a prototype |
+| B. Restrict sandbox tools by prompt or per-tool wrappers inside the sandbox                                                                                             | Cheap                                                                                                    | Enforcement inside the thing being constrained; prompts are not a boundary                              |
+| C. **Keep the sandbox permissive by profile; route external effects and model calls through server-side gateways that hold credentials and enforce policy and budgets** | Enforcement outside agent reach; agents keep their autonomy over the sandbox; credentials never enter it | Gateway is on the path of every external effect; model streaming through a proxy is work                |
+| D. Fully deny-by-default sandbox for everything                                                                                                                         | Strongest                                                                                                | Breaks most useful work (package installs, web reads)                                                   |
 
 ## Decision
 

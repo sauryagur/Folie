@@ -1,7 +1,8 @@
 // Wire and domain types shared by folie-server, the agent program and the CLI.
 
 export type Outcome = "done" | "failed";
-export type WorkItemState = "queued" | "assigned" | "blocked" | "done" | "failed";
+export type WorkItemState =
+  "queued" | "assigned" | "blocked" | "done" | "failed";
 
 export interface Message {
   id: number;
@@ -212,7 +213,16 @@ export interface InboxQuery {
 }
 
 export type SessionEventType =
-  | "session_start" | "message" | "turn_start" | "turn_end" | "tool_start" | "tool_end" | "steer" | "log" | "artifact" | "session_end";
+  | "session_start"
+  | "message"
+  | "turn_start"
+  | "turn_end"
+  | "tool_start"
+  | "tool_end"
+  | "steer"
+  | "log"
+  | "artifact"
+  | "session_end";
 
 export interface SessionEventInput {
   /** Position within the session; unique per session, so a resent batch never duplicates. */

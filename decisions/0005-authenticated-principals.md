@@ -8,12 +8,12 @@ folie-server's HTTP API is unauthenticated (D1). `from`, `agent` and the agent p
 
 ## Options
 
-| Option | For | Against |
-| --- | --- | --- |
-| A. Network trust (today) | Nothing to build | Any pod or sandbox can impersonate anyone; unacceptable for a general-purpose system |
-| B. Workload identity from Substrate/atenet (mTLS or injected source-actor header) | No secret in the sandbox | Not verified to exist ([OQ1](README.md#open-architectural-questions)); couples auth to AX |
-| C. **Opaque bearer token per execution, injected through `spec.env`, stored hashed, revocable** | Works with what ax offers (the LLM key already travels this way); instant revocation by generation bump; no new infrastructure | A secret in the sandbox environment; revocation latency from the resolution cache |
-| D. Signed JWT per execution | Stateless verification | Revocation needs a deny list anyway; key management |
+| Option                                                                                          | For                                                                                                                            | Against                                                                                   |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| A. Network trust (today)                                                                        | Nothing to build                                                                                                               | Any pod or sandbox can impersonate anyone; unacceptable for a general-purpose system      |
+| B. Workload identity from Substrate/atenet (mTLS or injected source-actor header)               | No secret in the sandbox                                                                                                       | Not verified to exist ([OQ1](README.md#open-architectural-questions)); couples auth to AX |
+| C. **Opaque bearer token per execution, injected through `spec.env`, stored hashed, revocable** | Works with what ax offers (the LLM key already travels this way); instant revocation by generation bump; no new infrastructure | A secret in the sandbox environment; revocation latency from the resolution cache         |
+| D. Signed JWT per execution                                                                     | Stateless verification                                                                                                         | Revocation needs a deny list anyway; key management                                       |
 
 ## Decision
 
@@ -21,7 +21,7 @@ Option C. The controller mints a token per execution and injects `FOLIE_AGENT_TO
 
 ## Consequences
 
-- A compromised sandbox can act as *its own agent* until revoked, and as no other agent. This is the honest bound of option C.
+- A compromised sandbox can act as _its own agent_ until revoked, and as no other agent. This is the honest bound of option C.
 - Revocation latency is stated (≤ 5 s) wherever kill-switch behaviour is described.
 - Fencing and the execution epoch now mean something: tokens bind an execution, so a zombie process from a lost execution is rejected once the execution is marked `lost`.
 - If workload identity (OQ1) proves available, it replaces token resolution behind the same `Principal` type; nothing above the auth layer changes.

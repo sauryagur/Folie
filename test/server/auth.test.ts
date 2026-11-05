@@ -25,18 +25,36 @@ describe("R-1.1 unauthenticated + forged identity", () => {
   });
 
   it("forged from/agent and cross-agent access -> 403", async () => {
-    await client.registerAgent("a"); await client.registerAgent("b");
+    await client.registerAgent("a");
+    await client.registerAgent("b");
     const asA = await cluster.agentClientFor("a");
     const asB = await cluster.agentClientFor("b");
     // forged from
-    await expect(asA.send({ from: "b", to: "a", body: "x" })).rejects.toThrow(/403/);
+    await expect(asA.send({ from: "b", to: "a", body: "x" })).rejects.toThrow(
+      /403/,
+    );
     // cross inbox
     await expect(asA.inbox("b")).rejects.toThrow(/403/);
     // cross report (needs a message for b, then report as b via a)
     const m = await client.send({ from: "human", to: "b", body: "hi" });
-    await expect(asA.report({ agent: "b", startedAt: new Date().toISOString(), outcome: "done", summary: "s", messageIds: [m.id] })).rejects.toThrow(/403/);
+    await expect(
+      asA.report({
+        agent: "b",
+        startedAt: new Date().toISOString(),
+        outcome: "done",
+        summary: "s",
+        messageIds: [m.id],
+      }),
+    ).rejects.toThrow(/403/);
     // cross events
-    await expect(asA.sessionEvents({ agent: "b", sessionId: "s1", scope: "wi:1", events: [{ seq: 0, type: "session_start", data: {} }] })).rejects.toThrow(/403/);
+    await expect(
+      asA.sessionEvents({
+        agent: "b",
+        sessionId: "s1",
+        scope: "wi:1",
+        events: [{ seq: 0, type: "session_start", data: {} }],
+      }),
+    ).rejects.toThrow(/403/);
     await expect(asA.attempts("b", "wi:1")).rejects.toThrow(/403/);
     void asB;
   });
@@ -85,20 +103,43 @@ describe("R-1.2 revoked/stale tokens fail; valid agent works", () => {
     // terminated execution
     const cred2 = await store.auth.getAgentCredential("a");
     const exec2 = "exec-lost";
-    const token2 = await store.auth.mintAgentToken("a", exec2, cred2!.generation);
-    await store.auth.upsertExecution("a", exec2, cred2!.generation, "terminated");
+    const token2 = await store.auth.mintAgentToken(
+      "a",
+      exec2,
+      cred2!.generation,
+    );
+    await store.auth.upsertExecution(
+      "a",
+      exec2,
+      cred2!.generation,
+      "terminated",
+    );
     const ac2 = new FolieClient(baseUrl, fetch, token2);
     await expect(ac2.inbox("a")).rejects.toThrow(/401/);
   });
 
   it("valid agent can send/report/ingest own events", async () => {
-    await client.registerAgent("a"); await client.registerAgent("b");
+    await client.registerAgent("a");
+    await client.registerAgent("b");
     const asA = await cluster.agentClientFor("a");
     const asB = await cluster.agentClientFor("b");
     const m = await asA.send({ from: "a", to: "b", body: "hi" });
     expect(m.from).toBe("a");
-    expect(await asB.sessionEvents({ agent: "b", sessionId: "s1", scope: "wi:1", events: [{ seq: 0, type: "session_start", data: {} }] })).toEqual({ stored: 1 });
-    const r = await asB.report({ agent: "b", startedAt: new Date().toISOString(), outcome: "done", summary: "ok", messageIds: [m.id] });
+    expect(
+      await asB.sessionEvents({
+        agent: "b",
+        sessionId: "s1",
+        scope: "wi:1",
+        events: [{ seq: 0, type: "session_start", data: {} }],
+      }),
+    ).toEqual({ stored: 1 });
+    const r = await asB.report({
+      agent: "b",
+      startedAt: new Date().toISOString(),
+      outcome: "done",
+      summary: "ok",
+      messageIds: [m.id],
+    });
     expect(r.agent).toBe("b");
   });
 });
@@ -107,26 +148,46 @@ describe("R-1.5 unknown agent 404; only registration or pool dispatch creates ro
   it("send/subscribe/inbox to unknown -> 404, no row created", async () => {
     await client.registerAgent("a");
     const asA = await cluster.agentClientFor("a");
-    await expect(client.send({ from: "human", to: "ghost-x", body: "x" })).rejects.toThrow(/404 unknown agent/);
-    await expect(asA.send({ from: "a", to: "ghost-x", body: "x" })).rejects.toThrow(/404 unknown agent/);
-    await expect(client.subscribe("news", { agent: "ghost-x" })).rejects.toThrow(/404 unknown agent/);
+    await expect(
+      client.send({ from: "human", to: "ghost-x", body: "x" }),
+    ).rejects.toThrow(/404 unknown agent/);
+    await expect(
+      asA.send({ from: "a", to: "ghost-x", body: "x" }),
+    ).rejects.toThrow(/404 unknown agent/);
+    await expect(
+      client.subscribe("news", { agent: "ghost-x" }),
+    ).rejects.toThrow(/404 unknown agent/);
     await expect(client.inbox("ghost-x")).rejects.toThrow(/404 unknown agent/);
     // publish to existing topic by human is allowed (does not create agent)
-    expect((await client.topics()).find((t) => t.topic === "news")).toBeUndefined();
-    expect((await client.agents()).find((a) => a.name === "ghost-x")).toBeUndefined();
+    expect(
+      (await client.topics()).find((t) => t.topic === "news"),
+    ).toBeUndefined();
+    expect(
+      (await client.agents()).find((a) => a.name === "ghost-x"),
+    ).toBeUndefined();
     // submitGoal to unknown does not create
-    await expect(client.submitGoal({ goal: "g", to: "ghost-x" })).rejects.toThrow(/404 unknown agent/);
-    expect((await client.agents()).find((a) => a.name === "ghost-x")).toBeUndefined();
+    await expect(
+      client.submitGoal({ goal: "g", to: "ghost-x" }),
+    ).rejects.toThrow(/404 unknown agent/);
+    expect(
+      (await client.agents()).find((a) => a.name === "ghost-x"),
+    ).toBeUndefined();
   });
 
   it("only explicit registration or pool dispatch creates agent rows", async () => {
     // queued goal creates no agent yet
     await client.submitGoal({ goal: "g" });
-    expect((await client.agents()).find((a) => a.name === "agent-1")).toBeUndefined();
+    expect(
+      (await client.agents()).find((a) => a.name === "agent-1"),
+    ).toBeUndefined();
     await tick(); // pool dispatch (internal server action) creates agent-1
-    expect((await client.agents()).find((a) => a.name === "agent-1")).toBeDefined();
+    expect(
+      (await client.agents()).find((a) => a.name === "agent-1"),
+    ).toBeDefined();
     // explicit registration
     await client.registerAgent("named-1");
-    expect((await client.agents()).find((a) => a.name === "named-1")).toBeDefined();
+    expect(
+      (await client.agents()).find((a) => a.name === "named-1"),
+    ).toBeDefined();
   });
 });
