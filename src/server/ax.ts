@@ -89,6 +89,7 @@ export function grpcAxClient(address: string, egress: EgressPolicies, protoDir?:
             env: Object.entries(spec.env).map(([name, value]) => ({ name, value })),
             ...(spec.resources ? { resources: { limits } } : {}),
             ...(spec.workspace ? { workspace: { name: spec.workspace.ref } } : {}),
+            debug: spec.debug ?? false,
           },
         },
       });

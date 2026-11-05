@@ -39,6 +39,7 @@ Status: **normative**. This is the specification Folie must meet. Architecture a
 | R-3.4 | A session MUST be bounded by deadline, turn cap and usage budget, and MUST settle `cancelled` at a limit | limit-reached session |
 | R-3.5 | A `task:` session ending without submit MUST be treated as `yielded` with a handoff note, never as completion; its claim MUST survive | yield tests |
 | R-3.6 | Harness, model and limits MUST be read per session so a change needs no new execution | config change between sessions *(live)* |
+| R-3.7 | Retirement MUST NOT be forgetting: executing termination MUST NOT delete the agent's scoped memory (R-4.1), its artifacts (R-4.4), or its audit history; the workspace archive policy (`archive` vs `scratch`) MUST gate termination, and an explicit operator decision is required before any memory removal | retire-then-fetch + retire-keeps-memory tests |
 | R-4.1 | Memory MUST be scoped `agent|team|goal|swarm`, with task notes constrained to their goal and tagged by `task_id`; access control MUST be enforced inside the query, with no unfiltered read | ACL matrix |
 | R-4.2 | Memory entries MUST be immutable with provenance; contradictions MUST be linked and surfaced, never silently resolved | contested-entry tests |
 | R-4.3 | Cross-goal retrieval MUST return only agent-scope entries marked `portable`; goal knowledge MUST NOT cross goals | contamination test |
@@ -63,6 +64,7 @@ Status: **normative**. This is the specification Folie must meet. Architecture a
 | R-6.8 | Every task MUST carry a `ResourcesSpec` (CPU/memory) set from per-agent policy, not left unlimited | task-spec test |
 | R-6.9 | Egress MUST be profile-based (`dev-full-trust` for development; named-host/per-port production profiles), with a documented owner and re-test cadence for private-IP exceptions (Substrate #2086) | policy test + deployment note |
 | R-6.10 | Retirement MUST NOT destroy the content-addressed artifact store or scoped memory service; workspace archive policy (`archive` vs `scratch`) MUST gate termination (see R-3.6, R-4.x) | retire tests |
+| R-6.11 | Default occupancy: every execution MUST carry a default `ResourcesSpec` (CPU/memory) from per-agent policy when none is explicitly set; "unlimited by default" MUST NOT be possible | config test |
 
 ### Goals and tasks ([`architecture/work-and-coordination.md`](../architecture/work-and-coordination.md), [`spec/domain-model.md`](domain-model.md) §4)
 

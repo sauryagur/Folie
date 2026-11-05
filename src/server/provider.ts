@@ -16,6 +16,8 @@ export interface ExecutionSpec {
   /** Durable provider-side workspace to bind (created if absent); it survives task termination. */
   workspace?: { ref: string };
   network: NetworkPolicy;
+  /** Guest gRPC exec/file backdoor; must stay false. See R-6.7. */
+  debug?: boolean;
 }
 
 /** Opaque handle to a provider-side execution. Carries the key it was created from. */

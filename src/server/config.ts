@@ -63,15 +63,15 @@ function positiveInt(env: NodeJS.ProcessEnv, key: string, fallback: number): num
   return n;
 }
 
-/** FOLIE_AGENT_RESOURCES="<k=v>,..." → `{ cpu: "250m", memory: "512Mi" }` at the provider. */
-function parseResources(raw?: string): { cpu?: string; memory?: string } | undefined {
-  if (!raw) return undefined;
+/** FOLIE_AGENT_RESOURCES="<k=v>,..." → `{ cpu: "250m", memory: "512Mi" }` at the provider. Default when unset (R-6.11). */
+export function parseResources(raw?: string): { cpu?: string; memory?: string } | undefined {
+  if (!raw) return { cpu: "500m", memory: "512Mi" };
   const entries = raw.split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
     const i = s.indexOf("=");
     if (i <= 0 || !["cpu", "memory"].includes(s.slice(0, i))) throw new Error(`FOLIE_AGENT_RESOURCES entry must be cpu= or memory=, got ${JSON.stringify(s)}`);
     return [s.slice(0, i), s.slice(i + 1)] as [string, string];
   });
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  return entries.length > 0 ? Object.fromEntries(entries) : { cpu: "500m", memory: "512Mi" };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {

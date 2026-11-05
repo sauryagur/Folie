@@ -72,7 +72,7 @@ describe("loadConfig", () => {
   it("reads FOLIE_AGENT_RESOURCES into provider resource limits", () => {
     const c = loadConfig({ ...base, FOLIE_AGENT_RESOURCES: "cpu=250m,memory=512Mi" });
     expect(c.controller.resources).toEqual({ cpu: "250m", memory: "512Mi" });
-    expect(loadConfig(base).controller.resources).toBeUndefined();
+    expect(loadConfig(base).controller.resources).toEqual({ cpu: "500m", memory: "512Mi" });
     for (const bad of ["nomatch", "cpu=1m,bad=2m"]) {
       expect(() => loadConfig({ ...base, FOLIE_AGENT_RESOURCES: bad })).toThrow(/FOLIE_AGENT_RESOURCES/);
     }
