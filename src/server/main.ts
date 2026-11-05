@@ -22,7 +22,14 @@ const telemetry = createTelemetry({ serviceName: "folie-server", otlpEndpoint: c
 telemetry.metrics.observeInboxDepth(async () => (await store.agents.list()).map((a) => ({ agent: a.name, depth: a.unread })));
 const service = new SwarmService(store, telemetry);
 
-const controller = new Controller(grpcAxClient(cfg.axAddr), grpcEgressPolicies(cfg.substrate), store.agents, cfg.controller, console, telemetry, store.auth);
+const controller = new Controller(
+  grpcAxClient(cfg.axAddr, grpcEgressPolicies(cfg.substrate)),
+  store.agents,
+  cfg.controller,
+  console,
+  telemetry,
+  store.auth,
+);
 let reconciling = false;
 const timer = setInterval(async () => {
   if (reconciling) return;

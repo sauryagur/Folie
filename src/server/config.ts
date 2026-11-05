@@ -1,6 +1,5 @@
 // Environment -> typed config. Pure, so it is testable without a process.
 import type { ControllerConfig } from "./controller";
-import { DEFAULT_WEB_PORTS, type SubstrateOptions } from "./substrate";
 
 export interface ServerConfig {
   port: number;
@@ -10,12 +9,32 @@ export interface ServerConfig {
   /** Ceiling on live pool agents (`agent-<n>`); unaddressed goals queue beyond it. */
   maxAgents: number;
   controller: ControllerConfig;
-  substrate: SubstrateOptions;
+  /** Options to build Substrate egress policy adapter; transport details live in substrate.ts. */
+  substrate: EgressPolicyOptions;
   /** Collector base URL (OTLP/HTTP). Unset: spans still propagate, nothing is exported. */
   otlpEndpoint?: string;
   /** Operator bearer token (FOLIE_OPERATOR_TOKEN). Required for deployment; compared constant-time, stored hashed. */
   operatorToken: string;
 }
+
+export interface EgressPolicyOptions {
+  address: string;
+  /** TLS server name; Substrate's certificate is for api.ate-system.svc. */
+  authority: string;
+  caFile: string;
+  /** Projected service-account token (audience api.ate-system.svc); re-read per call because it rotates. */
+  tokenFile: string;
+  ports: WebPorts;
+}
+
+export interface WebPorts {
+  /** Cleartext HTTP (folie-server, package mirrors, ...). */
+  http: number[];
+  /** TLS forwarded without interception (LLM APIs, git over https, ...). */
+  tls: number[];
+}
+
+export const DEFAULT_WEB_PORTS = { http: [80, 8080], tls: [443] };
 
 /** Vars named FOLIE_AGENT_ENV_<NAME> are forwarded into every agent task as <NAME> (e.g. the LLM key). */
 const FORWARD_PREFIX = "FOLIE_AGENT_ENV_";
@@ -44,6 +63,17 @@ function positiveInt(env: NodeJS.ProcessEnv, key: string, fallback: number): num
   return n;
 }
 
+/** FOLIE_AGENT_RESOURCES="<k=v>,..." → `{ cpu: "250m", memory: "512Mi" }` at the provider. */
+function parseResources(raw?: string): { cpu?: string; memory?: string } | undefined {
+  if (!raw) return undefined;
+  const entries = raw.split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
+    const i = s.indexOf("=");
+    if (i <= 0 || !["cpu", "memory"].includes(s.slice(0, i))) throw new Error(`FOLIE_AGENT_RESOURCES entry must be cpu= or memory=, got ${JSON.stringify(s)}`);
+    return [s.slice(0, i), s.slice(i + 1)] as [string, string];
+  });
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
   const forwarded = Object.fromEntries(
     Object.entries(env)
@@ -63,9 +93,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
     maxAgents: positiveInt(env, "FOLIE_MAX_AGENTS", 8),
     operatorToken,
     controller: {
-      atespace: env.FOLIE_ATESPACE ?? "folie",
+      namespace: env.FOLIE_ATESPACE ?? "folie",
       image: required(env, "FOLIE_AGENT_IMAGE"),
       command: JSON.parse(env.FOLIE_AGENT_COMMAND ?? '["/usr/local/bin/folie-agent"]'),
+      resources: parseResources(env.FOLIE_AGENT_RESOURCES),
       env: {
         FOLIE_SERVER_URL: env.FOLIE_AGENT_SERVER_URL ?? "http://folie-server.folie.svc:8080",
         ...forwarded,
