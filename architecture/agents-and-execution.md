@@ -114,6 +114,12 @@ Priorities, budget and ranking are configuration, not code branches, so they can
 - Useful context carries over because it is memory, notes, artifacts and the pack, all stored by Folie in neutral form. What does *not* carry over: provider-specific hidden state (prompt caches, reasoning tokens), which is lost and was never relied on.
 - Switching mid-session is unsupported by design.
 
+## New executions and the authenticated migration
+
+A workspace is created only when an execution starts: pool dispatch or explicit registration → `CreateTask` (or provider start) → the provider allocates `/workspace`, initially empty; resume and recovery fill it from a provider checkpoint, an archive, or nothing (table above). No server code creates, snapshots or deletes workspace bytes; the lifecycle above is the contract.
+
+**Operator migration prerequisite (upgrade to authenticated identity).** Existing agent tasks predate bearer tokens and are immutable: retrofitting credentials requires recreating each agent's task, and recreating a task deletes its `/workspace` (AX behavior, unverified against a live task). Therefore, for each live agent with valuable `/workspace` content, the operator MUST — before upgrading — either `artifact_put` the important outputs to the artifact store, run `memory_write` entries, or set `workspace_policy: archive` so the archive is taken before the old task is deleted. This upgrade must not proceed silently: recreating a task destroys workspace data irreversibly, so it is a destructive action needing explicit operator sign-off. If a live deployment holds workspace data that would be destroyed and cannot be archived first, stop and surface the risk for an explicit operator decision; any claims about preserving workspace data would be false without that step. New executions after the upgrade are unaffected: they receive tokens at start, and the authentication implementation is fail-closed (no unauthenticated fallback).
+
 ## Workspace and checkpoint lifecycle
 
 **What survives what** is the table every operator and every agent author needs. Today's behaviour is in the "today" column; the target changes the last two rows.
