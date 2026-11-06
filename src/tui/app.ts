@@ -14,8 +14,9 @@ import { HELP, execute, parseCommand, type CommandApi } from "./commands";
 import {
   fleetHeader as fleetHeaderText,
   VIEWS,
-  applyPoll,
+  alertBadge,
   buildInspector,
+  applyPoll,
   cancelPrompt,
   confirmCancelSession,
   cycleView,
@@ -154,7 +155,7 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
     const views = VIEWS.map((v, i) =>
       v === state.view ? `[${i + 1}:${v}]` : ` ${i + 1}:${v} `,
     ).join(" ");
-    header.content = ` folie   ${views}   ${state.connected ? "● connected" : "○ offline"}`;
+    header.content = ` folie   ${views}   ✗ ${alertBadge(state.alertSignals)} (a)   ${state.connected ? "● connected" : "○ offline"}`;
 
     const rows = fleetRows(state.agents, now());
     fleetHeader.content = fleetHeaderText(state.agents);
@@ -280,6 +281,12 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
       case "i":
         key.preventDefault();
         return showView("inspector");
+      case "a":
+        key.preventDefault();
+        return showView("alerts");
+      case "b":
+        key.preventDefault();
+        return showView("budgets");
       case "c":
         if (state.view === "inspector") {
           const t = openTrace(buildInspector(state.selected, state.sessionEvents));

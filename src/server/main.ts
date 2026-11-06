@@ -1,9 +1,10 @@
-// folie-server composition root: wires adapters to the service, HTTP surface and controller loop.
+import { randomUUID } from "node:crypto";
 import { grpcAxClient } from "./ax";
 import { loadConfig } from "./config";
 import { Controller } from "./controller";
 import { pgDatabase } from "./db";
 import { httpServer } from "./http";
+import { LeaderElection } from "./leader";
 import { otlpGateway } from "./otlp-gateway";
 import { pgStore } from "./pg-store";
 import { migrate } from "./schema";
@@ -35,14 +36,19 @@ const controller = new Controller(
   telemetry,
   store.auth,
 );
+// Leader-only loops: the lease outlives one tick (3x the interval), each tick renews it.
+const leader = new LeaderElection(db, `folie-server-${randomUUID()}`, cfg.reconcileMs * 3);
 let reconciling = false;
 const timer = setInterval(async () => {
   if (reconciling) return;
   reconciling = true;
   try {
-    // Dispatch first so goals assigned this pass wake their agents in the same pass.
-    await service.dispatchQueued(cfg.maxAgents);
-    await controller.reconcileOnce();
+    // Only the leader runs the background loops; replicas serve reads.
+    if (await leader.tryAcquire()) {
+      // Dispatch first so goals assigned this pass wake their agents in the same pass.
+      await service.dispatchQueued(cfg.maxAgents);
+      await controller.reconcileOnce();
+    }
   } catch (e) {
     console.error("controller: reconcile failed:", e);
   } finally {

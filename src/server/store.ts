@@ -18,6 +18,15 @@ import type {
   WorkItem,
   WorkItemState,
 } from "../shared/types";
+import type {
+  ArtifactPutInput,
+  MemoryEntry,
+  MemoryLinkKind,
+  MemoryPrincipal,
+  MemoryQuery,
+  NewMemory,
+  StoredArtifact,
+} from "./memory";
 
 /** A W3C trace context as stored on rows. */
 export interface StoredTrace {
@@ -117,6 +126,12 @@ export interface ExecutionRegistryRepo {
   setState(id: string, state: string): Promise<void>;
   markLostForAgent(agent: string): Promise<void>;
 }
+/** A held pre-authorization against a leaf budget (protocol §12 reserve). */
+export interface BudgetReservation {
+  id: number;
+  budgetId: number;
+  amount: number;
+}
 export interface BudgetRepo {
   create(b: {
     parentId?: number;
@@ -131,6 +146,18 @@ export interface BudgetRepo {
     name: string,
     limitAmount: number,
   ): Promise<BudgetRecord | null>;
+  /**
+   * Hold `amount` of the leaf budget's headroom for an imminent cost.
+   * Returns null when headroom cannot cover it (or the budget is closed).
+   * Pair with `commit` for actual usage and always `release` the hold.
+   */
+  reserve(
+    budgetId: number,
+    amount: number,
+    ref?: string,
+  ): Promise<BudgetReservation | null>;
+  /** Release a hold from `reserve`, returning its amount to headroom. */
+  release(reservationId: number): Promise<void>;
   /** Commit usage; flips exhausted on overrun. */
   commit(
     budgetId: number,
@@ -321,6 +348,117 @@ export interface EventRepo {
     excludeSession?: string,
   ): Promise<SessionEvent[]>;
 }
+export interface MemoryRepo {
+  /** Immutable write; returns the entry id. Contradiction/supersession links, never edits. */
+  write(e: NewMemory): Promise<number>;
+  /** No unfiltered read: every result passes the ACL for `as` inside this query (R-4.1). */
+  query(q: MemoryQuery, as: MemoryPrincipal): Promise<MemoryEntry[]>;
+  link(from: number, to: number, kind: MemoryLinkKind): Promise<void>;
+}
+
+export interface ArtifactRepo {
+  /** Content-addressed put; the same bytes always yield the same ref. */
+  put(input: ArtifactPutInput): Promise<{ sha256: string; bytes: number; ref: string }>;
+  /** By ref or bare sha256; survives execution termination and agent retirement (R-4.4). */
+  get(refOrHash: string): Promise<StoredArtifact | null>;
+}
+
+export type TeamStatus = "forming" | "active" | "dissolving" | "dissolved";
+export interface TeamRecord {
+  id: number;
+  name: string;
+  scopeKind: "goal" | "task";
+  scopeId: string;
+  purpose: string;
+  status: TeamStatus;
+  convener: string | null;
+  budgetId: number | null;
+  minMembers: number;
+  charter: Record<string, unknown>;
+}
+export interface TeamMember {
+  teamId: number;
+  agent: string;
+  label: string;
+  responsibilities: string;
+}
+export interface TeamRepo {
+  create(b: {
+    name: string;
+    scopeKind: "goal" | "task";
+    scopeId: string;
+    purpose: string;
+    convener: string;
+    budgetId?: number;
+    minMembers?: number;
+    charter?: Record<string, unknown>;
+  }): Promise<TeamRecord>;
+  get(id: number): Promise<TeamRecord | null>;
+  getByName(name: string): Promise<TeamRecord | null>;
+  list(status?: TeamStatus): Promise<TeamRecord[]>;
+  addMember(teamId: number, agent: string, label: string, responsibilities: string): Promise<TeamMember>;
+  members(teamId: number): Promise<TeamMember[]>;
+  setResponsibility(teamId: number, agent: string, responsibilities: string): Promise<void>;
+  setStatus(id: number, status: TeamStatus): Promise<TeamRecord | null>;
+}
+export type CapabilityLevel = "declared" | "assessed" | "verified";
+export interface CapabilityRecord {
+  id: number;
+  name: string;
+  version: string;
+  description: string;
+  riskClass: string;
+}
+export interface AgentCapability {
+  agent: string;
+  capabilityId: number;
+  level: CapabilityLevel;
+  probeResult: unknown;
+  verifier: string | null;
+}
+export interface CapabilityRepo {
+  define(b: { name: string; version?: string; description?: string; riskClass?: string }): Promise<CapabilityRecord>;
+  getByName(name: string): Promise<CapabilityRecord | null>;
+  declare(agent: string, capabilityId: number): Promise<AgentCapability>;
+  assess(agent: string, capabilityId: number, probeResult: unknown, verifier: string): Promise<AgentCapability | null>;
+  verify(agent: string, capabilityId: number, probeResult: unknown, verifier: string): Promise<AgentCapability | null>;
+  getLevel(agent: string, capabilityId: number): Promise<CapabilityLevel | null>;
+  listForAgent(agent: string): Promise<AgentCapability[]>;
+}
+export interface ProposalRecord {
+  id: number;
+  goalId: number;
+  proposer: string;
+  parentId: number | null;
+  depth: number;
+  dedupKey: string | null;
+  title: string;
+  createdAt: string;
+}
+export type ProposeOutcome =
+  | { ok: true; proposal: ProposalRecord }
+  | { ok: false; duplicate: true; existingId: number }
+  | { ok: false; quotaExceeded: string };
+export interface CoordinationRepo {
+  propose(b: {
+    goalId: number;
+    proposer: string;
+    parentId?: number;
+    depth: number;
+    dedupKey?: string;
+    title: string;
+    limits?: QuotaLimits;
+  }): Promise<ProposeOutcome>;
+  listForGoal(goalId: number, limit?: number): Promise<ProposalRecord[]>;
+  recordDissent(taskId: number, contributor: string, note: string): Promise<number>;
+  listDissents(taskId: number): Promise<{ id: number; contributor: string; note: string; createdAt: string }[]>;
+}
+export interface QuotaLimits {
+  maxDepth: number;
+  maxFanOut: number;
+  maxWip: number;
+  maxProposalsPerHour: number;
+}
 
 export interface Repos {
   messages: MessageRepo;
@@ -337,6 +475,11 @@ export interface Repos {
   verifications: VerificationRepo;
   goalEvaluations: GoalEvaluationRepo;
   control: ControlRepo;
+  memories: MemoryRepo;
+  artifacts: ArtifactRepo;
+  teams: TeamRepo;
+  capabilities: CapabilityRepo;
+  coordination: CoordinationRepo;
 }
 
 export interface Store extends Repos {

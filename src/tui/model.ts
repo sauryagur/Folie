@@ -1,8 +1,8 @@
 // TUI state and its pure transitions. No terminal, no network: everything here is testable under Node.
 import type { AgentInfo, Message, Report, SessionEvent, TopicInfo } from "../shared/types";
 
-export type View = "stream" | "inbox" | "topics" | "reports" | "inspector";
-export const VIEWS: readonly View[] = ["stream", "inbox", "topics", "reports", "inspector"];
+export type View = "stream" | "inbox" | "topics" | "reports" | "inspector" | "alerts" | "budgets";
+export const VIEWS: readonly View[] = ["stream", "inbox", "topics", "reports", "inspector", "alerts", "budgets"];
 
 /** The stream keeps this many newest messages; older ones scroll out of memory, not out of the database. */
 export const STREAM_CAP = 500;
@@ -22,6 +22,10 @@ export interface TuiState {
   /** Neutral session events of the selected agent (view "inspector"). */
   sessionEvents: SessionEvent[];
   topics: TopicInfo[];
+  /** Attention signals feeding the alerts queue (view "alerts"); empty until a feed supplies them. */
+  alertSignals: AlertSignal[];
+  /** Budget carve-outs feeding the budgets tree (view "budgets"); empty until a feed supplies them. */
+  budgets: BudgetNodeInput[];
   /** Result of the last command, or the last poll failure. */
   status: string;
   connected: boolean;
@@ -37,6 +41,8 @@ export const initialState = (): TuiState => ({
   reports: [],
   sessionEvents: [],
   topics: [],
+  alertSignals: [],
+  budgets: [],
   status: "connecting…",
   connected: false,
 });
@@ -49,7 +55,216 @@ export interface PollResult {
   inbox?: Message[];
   reports?: Report[];
   sessionEvents?: SessionEvent[];
+  alertSignals?: AlertSignal[];
+  budgets?: BudgetNodeInput[];
   forAgent?: string | null;
+}
+
+// --- alerts (attention queue) ---
+// Pure view-model over plain signals. No OTel is read here: signals arrive as data (via
+// PollResult.alertSignals), so a dropped trace span never creates or hides an alert.
+
+export type AlertKind =
+  | "verification_rejected" | "budget_exhausted" | "stall" | "approval_expiring"
+  | "execution_lost" | "policy_denied" | "stale_fence_conflict" | "undelivered_publication";
+export type AlertSeverity = "critical" | "warning" | "info";
+
+/** A raw attention signal, as a feed would supply it. Linkage fields are optional. */
+export interface AlertSignal {
+  kind: AlertKind;
+  severity?: AlertSeverity;
+  at?: string | null;
+  agent?: string | null;
+  workItemId?: number | null;
+  episodeId?: string | null;
+  detail?: string;
+  intervention?: string;
+}
+
+export interface AlertItem {
+  id: string;
+  kind: AlertKind;
+  severity: AlertSeverity;
+  icon: string;
+  label: string;
+  at: string | null;
+  agent: string | null;
+  workItemId: number | null;
+  episodeId: string | null;
+  detail: string;
+  intervention: string;
+}
+
+const SEVERITY_RANK: Record<AlertSeverity, number> = { critical: 0, warning: 1, info: 2 };
+const SEVERITY_ICON: Record<AlertSeverity, string> = { critical: "✗", warning: "!", info: "●" };
+
+const DEFAULT_SEVERITY: Record<AlertKind, AlertSeverity> = {
+  verification_rejected: "critical",
+  budget_exhausted: "critical",
+  execution_lost: "critical",
+  policy_denied: "warning",
+  stale_fence_conflict: "warning",
+  approval_expiring: "warning",
+  stall: "warning",
+  undelivered_publication: "info",
+};
+
+const DEFAULT_INTERVENTION: Record<AlertKind, string> = {
+  verification_rejected: "re-request verification",
+  budget_exhausted: "raise budget or pause work",
+  stall: "nudge or wake the agent",
+  approval_expiring: "approve or deny before expiry",
+  execution_lost: "resume the session",
+  policy_denied: "adjust policy or appeal the denial",
+  stale_fence_conflict: "rebase onto the current fence",
+  undelivered_publication: "retry the publication",
+};
+
+/** Orders signals: critical first, then newest first, then kind. Pure and stable. */
+export function buildAlerts(signals: AlertSignal[]): AlertItem[] {
+  return signals
+    .map((sig, i): AlertItem => {
+      const severity = sig.severity ?? DEFAULT_SEVERITY[sig.kind];
+      return {
+        id: `${sig.kind}:${i}`,
+        kind: sig.kind,
+        severity,
+        icon: SEVERITY_ICON[severity],
+        label: sig.kind.replace(/_/g, " "),
+        at: sig.at ?? null,
+        agent: sig.agent ?? null,
+        workItemId: sig.workItemId ?? null,
+        episodeId: sig.episodeId ?? null,
+        detail: sig.detail ?? "",
+        intervention: sig.intervention ?? DEFAULT_INTERVENTION[sig.kind],
+      };
+    })
+    .sort((a, b) => {
+      const sev = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity];
+      if (sev !== 0) return sev;
+      const at = (b.at ?? "").localeCompare(a.at ?? "");
+      if (at !== 0) return at;
+      return a.kind.localeCompare(b.kind);
+    });
+}
+
+/** Where an alert points: episode, work item, or agent — always stated as words. */
+export const alertLink = (a: AlertItem): string =>
+  a.episodeId ? `episode ${a.episodeId}`
+  : a.workItemId !== null ? `work item ${a.workItemId}`
+  : a.agent ? `agent ${a.agent}` : "fleet";
+
+export const alertCount = (signals: AlertSignal[]): number => signals.length;
+
+/** The header counter; the app renders it and `a` jumps to the alerts view. */
+export const alertBadge = (signals: AlertSignal[]): string => `alerts ${signals.length}`;
+
+/** Every line carries icon + severity words, so status never rests on colour alone. */
+export function alertsLines(alerts: AlertItem[]): string[] {
+  if (!alerts.length) return ["✓ no alerts — attention queue clear"];
+  return alerts.map(
+    (a) => `${a.icon} ${a.severity} ${a.label}  → ${alertLink(a)}  · intervene: ${a.intervention}${a.detail ? `  (${a.detail})` : ""}`,
+  );
+}
+
+// --- budgets (carve-out tree) ---
+// Pure view-model over plain budget records. Spent/reserved/headroom are computed here;
+// enforcement honesty lives in the E-tier label, never in a colour.
+
+export type BudgetDimension = "usd" | "tokens" | "tool-calls";
+export type EnforcementTier = "E0" | "E1" | "E2";
+
+export const ENFORCEMENT_LABELS: Record<EnforcementTier, string> = {
+  E0: "E0 record-only",
+  E1: "E1 stops within one model turn",
+  E2: "E2 gateway-enforced",
+};
+
+export const enforcementLabel = (tier: EnforcementTier = "E0"): string => ENFORCEMENT_LABELS[tier];
+
+/** Stated like a warning label until the gateway lands; defaults to E0. */
+export const enforcementWarning = (tier: EnforcementTier = "E0"): string =>
+  `⚠ enforcement: ${enforcementLabel(tier)} — not gateway-enforced yet`;
+
+/** One budget row as a feed supplies it; parentId links the carve-out tree. */
+export interface BudgetNodeInput {
+  id: number;
+  name: string;
+  dim: BudgetDimension | string;
+  limit: number;
+  reserved: number;
+  spent: number;
+  parentId?: number | null;
+  tier?: EnforcementTier;
+  /** Burn rate per minute in the same units as spent; enables the forecast. */
+  spentPerMin?: number | null;
+  status?: string;
+}
+
+export interface BudgetTreeNode {
+  id: number;
+  name: string;
+  dim: string;
+  limit: number;
+  reserved: number;
+  spent: number;
+  /** limit − spent − reserved; negative means over budget. */
+  headroom: number;
+  tier: EnforcementTier;
+  status: string;
+  /** Minutes until exhaustion at the current burn rate; null when unknown or not burning. */
+  exhaustInMins: number | null;
+  children: BudgetTreeNode[];
+}
+
+export function buildBudgetTree(records: BudgetNodeInput[]): BudgetTreeNode[] {
+  const byId = new Map<number, BudgetTreeNode>();
+  const nodes = records.map((r): BudgetTreeNode => {
+    const headroom = r.limit - r.spent - r.reserved;
+    const burn = r.spentPerMin ?? null;
+    return {
+      id: r.id,
+      name: r.name,
+      dim: r.dim,
+      limit: r.limit,
+      reserved: r.reserved,
+      spent: r.spent,
+      headroom,
+      tier: r.tier ?? "E0",
+      status: r.status ?? "open",
+      exhaustInMins: headroom <= 0 ? 0 : burn && burn > 0 ? headroom / burn : null,
+      children: [],
+    };
+  });
+  for (const n of nodes) byId.set(n.id, n);
+  const roots: BudgetTreeNode[] = [];
+  for (let i = 0; i < records.length; i++) {
+    const node = nodes[i]!;
+    const parent = records[i]!.parentId ?? null;
+    const host = parent !== null ? byId.get(parent) : undefined;
+    if (host && host !== node) host.children.push(node);
+    else roots.push(node);
+  }
+  return roots;
+}
+
+const budgetStatus = (n: BudgetTreeNode): string => (n.headroom < 0 ? "over" : n.headroom === 0 ? "exhausted" : n.headroom / n.limit <= 0.2 ? "tight" : "ok");
+
+/** Tree lines with icon + words per node; the E-tier is always printed, like a warning label. */
+export function budgetLines(roots: BudgetTreeNode[]): string[] {
+  if (!roots.length) return ["? no budgets yet — submit a goal to create one"];
+  const lines: string[] = [];
+  const walk = (n: BudgetTreeNode, depth: number) => {
+    const indent = "  ".repeat(depth);
+    const status = budgetStatus(n);
+    const icon = status === "over" || status === "exhausted" ? "✗" : status === "tight" ? "!" : "✓";
+    const burn = n.exhaustInMins !== null ? `  burn → exhausts in ~${Math.round(n.exhaustInMins)}m` : "";
+    lines.push(`${indent}${icon} ${n.name} [${n.dim}]  spent=${n.spent} reserved=${n.reserved} headroom=${n.headroom} ${status}  · ${n.status}${burn}`);
+    lines.push(`${indent}  ${enforcementWarning(n.tier)}`);
+    for (const c of n.children) walk(c, depth + 1);
+  };
+  for (const r of roots) walk(r, 0);
+  return lines;
 }
 
 export function applyPoll(s: TuiState, p: PollResult): TuiState {
@@ -75,6 +290,8 @@ export function applyPoll(s: TuiState, p: PollResult): TuiState {
     inbox: current ? (p.inbox ?? prev(s.inbox)) : prev(s.inbox),
     reports: current ? (p.reports ?? prev(s.reports)) : prev(s.reports),
     sessionEvents: current ? (p.sessionEvents ?? prev(s.sessionEvents)) : prev(s.sessionEvents),
+    alertSignals: p.alertSignals ?? s.alertSignals,
+    budgets: p.budgets ?? s.budgets,
     connected: true,
     status: s.connected ? s.status : "connected",
   };
@@ -548,6 +765,10 @@ export function paneLines(s: TuiState): string[] {
       return s.topics.length ? s.topics.map(formatTopic) : ["No topics yet. Try: subscribe <topic> [agent]"];
     case "inspector":
       return inspectorLines(buildInspector(s.selected, s.sessionEvents));
+    case "alerts":
+      return alertsLines(buildAlerts(s.alertSignals));
+    case "budgets":
+      return budgetLines(buildBudgetTree(s.budgets));
   }
 }
 
@@ -557,5 +778,7 @@ export const paneTitle = (s: TuiState) =>
     inbox: `inbox: ${s.selected ?? "-"}`,
     reports: `reports: ${s.selected ?? "-"}`,
     topics: "topics",
-    inspector: `inspector: ${s.selected ?? "-"}`
+    inspector: `inspector: ${s.selected ?? "-"}`,
+    alerts: `alerts (${s.alertSignals.length})`,
+    budgets: "budgets"
   })[s.view];

@@ -15,14 +15,21 @@ import type {
 } from "../shared/types";
 import type { Database, Queryable, Row } from "./db";
 import type {
+  AgentCapability,
   AgentRepo,
   AuthRepo,
   BudgetRepo,
+  CapabilityRecord,
+  CapabilityRepo,
+  CoordinationRepo,
   ControlRepo,
   EventRepo,
   ExecutionRegistryRepo,
   GoalEvaluationRepo,
   MessageRepo,
+  ProposalRecord,
+  ProposeOutcome,
+  QuotaLimits,
   Repos,
   ReportRepo,
   SessionRecord,
@@ -30,11 +37,27 @@ import type {
   Store,
   StoredTrace,
   TaskRepo,
+  TeamMember,
+  TeamRepo,
+  TeamRecord,
+  TeamStatus,
   TopicRepo,
   VerificationRepo,
   WorkItemRepo,
+  ArtifactRepo,
+  CapabilityLevel,
+  MemoryRepo,
 } from "./store";
+import { artifactHash, artifactRef, sha256Of } from "./memory";
 import { generateExecutionId, generateToken, hashToken } from "./auth";
+import type {
+  MemoryEntry,
+  MemoryKind,
+  MemoryLinkKind,
+  MemoryScope,
+  MemoryStatus,
+  StoredArtifact,
+} from "./memory";
 
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
 const NO_TRACE: StoredTrace = { traceparent: null, tracestate: null };
@@ -801,6 +824,35 @@ const budgets = (q: Queryable): BudgetRepo => ({
     );
     return toBudget(child[0]!);
   },
+  async reserve(budgetId, amount, ref) {
+    const { rows } = await q.query(
+      `UPDATE budgets SET reserved = reserved + $2 WHERE id=$1 AND status <> 'closed' AND limit_amount - reserved - spent >= $2 RETURNING id`,
+      [budgetId, amount],
+    );
+    if (!rows[0]) return null;
+    const { rows: res } = await q.query(
+      `INSERT INTO budget_reservations (budget_id, amount, ref) VALUES ($1,$2,$3) RETURNING id, budget_id, amount`,
+      [budgetId, amount, ref ?? null],
+    );
+    const r = res[0]!;
+    return {
+      id: r.id as number,
+      budgetId: r.budget_id as number,
+      amount: Number(r.amount),
+    };
+  },
+  async release(reservationId) {
+    const { rows } = await q.query(
+      `UPDATE budget_reservations SET state='released' WHERE id=$1 AND state='active' RETURNING budget_id, amount`,
+      [reservationId],
+    );
+    const r = rows[0];
+    if (!r) return;
+    await q.query(
+      `UPDATE budgets SET reserved = reserved - $2 WHERE id=$1`,
+      [r.budget_id as number, Number(r.amount)],
+    );
+  },
   async commit(budgetId, amount, basis) {
     await q.query(
       `INSERT INTO usage_records (budget_id, amount, basis) VALUES ($1,$2,$3)`,
@@ -928,6 +980,490 @@ const control = (q: Queryable): ControlRepo => ({
     };
   },
 });
+const MEMORY_COLS =
+  "id, scope, scope_id, kind, content, data, provenance, origin_goal_id, portable, status, confidence, superseded_by, task_id, created_by, created_at";
+const json = (v: unknown): Record<string, unknown> =>
+  (typeof v === "string" ? JSON.parse(v) : (v ?? {})) as Record<string, unknown>;
+const toMemory = (r: Row): MemoryEntry => ({
+  id: r.id as number,
+  scope: r.scope as MemoryScope,
+  scopeId: r.scope_id as string,
+  kind: r.kind as MemoryKind,
+  content: r.content as string,
+  data: json(r.data),
+  provenance: json(r.provenance),
+  originGoalId: (r.origin_goal_id as string | null) ?? null,
+  portable: r.portable as boolean,
+  status: r.status as MemoryStatus,
+  confidence: Number(r.confidence),
+  supersededBy: (r.superseded_by as number | null) ?? null,
+  taskId: (r.task_id as number | null) ?? null,
+  createdBy: r.created_by as string,
+  createdAt: iso(r.created_at),
+  links: [],
+});
+const memories = (q: Queryable): MemoryRepo => ({
+  async write(e) {
+    const { rows } = await q.query(
+      `INSERT INTO memories (scope, scope_id, kind, content, data, provenance, origin_goal_id, portable, confidence, task_id, created_by)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11) RETURNING id`,
+      [
+        e.scope ?? "goal",
+        e.scopeId,
+        e.kind ?? "semantic",
+        e.content,
+        JSON.stringify(e.data ?? {}),
+        JSON.stringify(e.provenance ?? {}),
+        e.originGoalId ?? null,
+        e.portable ?? false,
+        e.confidence ?? 1,
+        e.taskId ?? null,
+        e.createdBy,
+      ],
+    );
+    const id = Number(rows[0]!.id);
+    for (const target of e.contradicts ?? []) {
+      await q.query(
+        `INSERT INTO memory_links (from_id, to_id, kind) VALUES ($1,$2,'contradicts') ON CONFLICT DO NOTHING`,
+        [id, target],
+      );
+      await q.query(
+        `UPDATE memories SET status='contested' WHERE id IN ($1,$2) AND status='active'`,
+        [id, target],
+      );
+    }
+    if (e.supersedes != null) {
+      await q.query(
+        `INSERT INTO memory_links (from_id, to_id, kind) VALUES ($1,$2,'supersedes') ON CONFLICT DO NOTHING`,
+        [id, e.supersedes],
+      );
+      await q.query(
+        `UPDATE memories SET status='superseded', superseded_by=$2 WHERE id=$1`,
+        [e.supersedes, id],
+      );
+    }
+    return id;
+  },
+  async query(query, as) {
+    const conds: string[] = [];
+    const params: unknown[] = [];
+    const bindParam = (v: unknown): string => {
+      params.push(v);
+      return `$${params.length}`;
+    };
+    if (as.kind !== "operator") {
+      const name = bindParam(as.name);
+      const teams = bindParam(as.teams ?? []);
+      const goals = bindParam(as.goals ?? []);
+      const swarm = bindParam(as.swarm ?? false);
+      conds.push(`((scope='agent' AND scope_id=${name}) OR (scope='team' AND scope_id = ANY(${teams}::text[])) OR (scope='goal' AND scope_id = ANY(${goals}::text[])) OR (scope='swarm' AND ${swarm}))`);
+    }
+    if (query.scope) conds.push(`scope=${bindParam(query.scope)}`);
+    if (query.scopeId) conds.push(`scope_id=${bindParam(query.scopeId)}`);
+    if (query.portableOnly) conds.push(`scope='agent' AND portable`);
+    if (query.text) conds.push(`content ILIKE ${bindParam(`%${query.text}%`)}`);
+    if (query.kinds?.length) conds.push(`kind = ANY(${bindParam(query.kinds)}::text[])`);
+    const limit = bindParam(query.limit ?? 50);
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const { rows } = await q.query(
+      `SELECT ${MEMORY_COLS} FROM memories ${where} ORDER BY id DESC LIMIT ${limit}`,
+      params,
+    );
+    const entries = rows.map(toMemory);
+    const ids = entries.map((e) => e.id);
+    if (ids.length) {
+      const { rows: links } = await q.query(
+        `SELECT from_id, to_id, kind FROM memory_links WHERE from_id = ANY($1::int[]) OR to_id = ANY($1::int[])`,
+        [ids],
+      );
+      for (const l of links) {
+        const from = entries.find((e) => e.id === Number(l.from_id));
+        const to = entries.find((e) => e.id === Number(l.to_id));
+        if (from)
+          from.links.push({
+            id: Number(l.to_id),
+            kind: l.kind as MemoryLinkKind,
+            direction: "out",
+          });
+        if (to)
+          to.links.push({
+            id: Number(l.from_id),
+            kind: l.kind as MemoryLinkKind,
+            direction: "in",
+          });
+      }
+    }
+    return entries;
+  },
+  async link(from, to, kind) {
+    await q.query(
+      `INSERT INTO memory_links (from_id, to_id, kind) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`,
+      [from, to, kind],
+    );
+    if (kind === "contradicts")
+      await q.query(
+        `UPDATE memories SET status='contested' WHERE id IN ($1,$2) AND status='active'`,
+        [from, to],
+      );
+  },
+});
+const toArtifact = (r: Row): StoredArtifact => ({
+  sha256: r.sha256 as string,
+  ref: r.ref as string,
+  bytes: (r.data as Uint8Array).length,
+  name: r.name as string,
+  mediaType: r.media_type as string,
+  description: r.description as string,
+  producer: r.producer as string,
+  goalId: (r.goal_id as string | null) ?? null,
+  taskId: (r.task_id as number | null) ?? null,
+  provenance: json(r.provenance),
+  createdAt: iso(r.created_at),
+  data: r.data as Uint8Array,
+});
+const ARTIFACT_COLS =
+  "sha256, ref, data, name, media_type, description, producer, goal_id, task_id, provenance, created_at";
+const artifacts = (q: Queryable): ArtifactRepo => ({
+  async put(input) {
+    const hash = sha256Of(input.bytes);
+    const ref = artifactRef(hash);
+    const data = Buffer.from(input.bytes);
+    const { rows } = await q.query(
+      `INSERT INTO artifacts (sha256, ref, data, name, media_type, description, producer, goal_id, task_id, provenance)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb) ON CONFLICT (sha256) DO NOTHING
+       RETURNING sha256, ref, octet_length(data) AS bytes`,
+      [
+        hash,
+        ref,
+        data,
+        input.name ?? "",
+        input.mediaType ?? "application/octet-stream",
+        input.description ?? "",
+        input.producer,
+        input.goalId ?? null,
+        input.taskId ?? null,
+        JSON.stringify(input.provenance ?? {}),
+      ],
+    );
+    if (rows[0])
+      return {
+        sha256: rows[0].sha256 as string,
+        ref: rows[0].ref as string,
+        bytes: Number(rows[0].bytes),
+      };
+    const { rows: existing } = await q.query(
+      `SELECT sha256, ref, octet_length(data) AS bytes FROM artifacts WHERE sha256=$1`,
+      [hash],
+    );
+    const r = existing[0]!;
+    return { sha256: r.sha256 as string, ref: r.ref as string, bytes: Number(r.bytes) };
+  },
+  async get(refOrHash) {
+    const hash = artifactHash(refOrHash);
+    const { rows } = await q.query(
+      `SELECT ${ARTIFACT_COLS} FROM artifacts WHERE sha256=$1 OR ref=$2`,
+      [hash, refOrHash],
+    );
+    return rows[0] ? toArtifact(rows[0]) : null;
+  },
+});
+const TEAM_COLS =
+  "id, name, scope_kind, scope_id, purpose, status, convener, budget_id, min_members, charter";
+const toTeam = (r: Row): TeamRecord => ({
+  id: r.id as number,
+  name: r.name as string,
+  scopeKind: r.scope_kind as "goal" | "task",
+  scopeId: r.scope_id as string,
+  purpose: r.purpose as string,
+  status: r.status as TeamStatus,
+  convener: (r.convener as string | null) ?? null,
+  budgetId: (r.budget_id as number | null) ?? null,
+  minMembers: r.min_members as number,
+  charter: json(r.charter),
+});
+const teams = (q: Queryable): TeamRepo => ({
+  async create(b) {
+    const { rows } = await q.query(
+      `INSERT INTO teams (name, scope_kind, scope_id, purpose, convener, budget_id, min_members, charter)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) RETURNING ${TEAM_COLS}`,
+      [
+        b.name,
+        b.scopeKind,
+        b.scopeId,
+        b.purpose,
+        b.convener,
+        b.budgetId ?? null,
+        b.minMembers ?? 1,
+        JSON.stringify(b.charter ?? {}),
+      ],
+    );
+    return toTeam(rows[0]!);
+  },
+  async get(id) {
+    const { rows } = await q.query(
+      `SELECT ${TEAM_COLS} FROM teams WHERE id=$1`,
+      [id],
+    );
+    return rows[0] ? toTeam(rows[0]) : null;
+  },
+  async getByName(name) {
+    const { rows } = await q.query(
+      `SELECT ${TEAM_COLS} FROM teams WHERE name=$1`,
+      [name],
+    );
+    return rows[0] ? toTeam(rows[0]) : null;
+  },
+  async list(status) {
+    const { rows } = status
+      ? await q.query(`SELECT ${TEAM_COLS} FROM teams WHERE status=$1 ORDER BY id`, [status])
+      : await q.query(`SELECT ${TEAM_COLS} FROM teams ORDER BY id`);
+    return rows.map(toTeam);
+  },
+  async addMember(teamId, agent, label, responsibilities): Promise<TeamMember> {
+    const { rows } = await q.query(
+      `INSERT INTO team_members (team_id, agent, label, responsibilities)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (team_id, agent) DO UPDATE SET label=EXCLUDED.label, responsibilities=EXCLUDED.responsibilities
+       RETURNING team_id, agent, label, responsibilities`,
+      [teamId, agent, label, responsibilities],
+    );
+    const r = rows[0]!;
+    return {
+      teamId: r.team_id as number,
+      agent: r.agent as string,
+      label: r.label as string,
+      responsibilities: r.responsibilities as string,
+    };
+  },
+  async members(teamId) {
+    const { rows } = await q.query(
+      `SELECT team_id, agent, label, responsibilities FROM team_members WHERE team_id=$1 ORDER BY agent`,
+      [teamId],
+    );
+    return rows.map((r) => ({
+      teamId: r.team_id as number,
+      agent: r.agent as string,
+      label: r.label as string,
+      responsibilities: r.responsibilities as string,
+    }));
+  },
+  async setResponsibility(teamId, agent, responsibilities) {
+    await q.query(
+      `UPDATE team_members SET responsibilities=$3 WHERE team_id=$1 AND agent=$2`,
+      [teamId, agent, responsibilities],
+    );
+  },
+  async setStatus(id, status) {
+    const { rows } = await q.query(
+      `UPDATE teams SET status=$2, dissolved_at=CASE WHEN $2='dissolved' THEN now() ELSE dissolved_at END
+       WHERE id=$1 RETURNING ${TEAM_COLS}`,
+      [id, status],
+    );
+    return rows[0] ? toTeam(rows[0]) : null;
+  },
+});
+const CAP_COLS = "id, name, version, description, risk_class";
+const toCapability = (r: Row): CapabilityRecord => ({
+  id: r.id as number,
+  name: r.name as string,
+  version: r.version as string,
+  description: r.description as string,
+  riskClass: r.risk_class as string,
+});
+const toAgentCap = (r: Row): AgentCapability => ({
+  agent: r.agent as string,
+  capabilityId: r.capability_id as number,
+  level: r.level as CapabilityLevel,
+  probeResult: r.probe_result ?? null,
+  verifier: (r.verifier as string | null) ?? null,
+});
+const capabilities = (q: Queryable): CapabilityRepo => ({
+  async define(b) {
+    const { rows } = await q.query(
+      `INSERT INTO capabilities (name, version, description, risk_class)
+       VALUES ($1,$2,$3,$4) RETURNING ${CAP_COLS}`,
+      [b.name, b.version ?? "1", b.description ?? "", b.riskClass ?? "R0"],
+    );
+    return toCapability(rows[0]!);
+  },
+  async getByName(name) {
+    const { rows } = await q.query(
+      `SELECT ${CAP_COLS} FROM capabilities WHERE name=$1`,
+      [name],
+    );
+    return rows[0] ? toCapability(rows[0]) : null;
+  },
+  async declare(agent, capabilityId) {
+    const { rows } = await q.query(
+      `INSERT INTO agent_capabilities (agent, capability_id) VALUES ($1,$2)
+       ON CONFLICT (agent, capability_id) DO NOTHING RETURNING *`,
+      [agent, capabilityId],
+    );
+    if (rows[0]) return toAgentCap(rows[0]);
+    const { rows: existing } = await q.query(
+      `SELECT * FROM agent_capabilities WHERE agent=$1 AND capability_id=$2`,
+      [agent, capabilityId],
+    );
+    return toAgentCap(existing[0]!);
+  },
+  async assess(agent, capabilityId, probeResult, verifier) {
+    if (verifier === agent) return null;
+    const { rows } = await q.query(
+      `UPDATE agent_capabilities
+       SET level='assessed', probe_result=$3::jsonb, verifier=$4
+       WHERE agent=$1 AND capability_id=$2 AND level='declared'
+       RETURNING *`,
+      [agent, capabilityId, JSON.stringify(probeResult ?? {}), verifier],
+    );
+    return rows[0] ? toAgentCap(rows[0]) : null;
+  },
+  async verify(agent, capabilityId, probeResult, verifier) {
+    if (verifier === agent) return null;
+    const { rows } = await q.query(
+      `UPDATE agent_capabilities
+       SET level='verified', probe_result=$3::jsonb, verifier=$4
+       WHERE agent=$1 AND capability_id=$2 AND level='assessed'
+       RETURNING *`,
+      [agent, capabilityId, JSON.stringify(probeResult ?? {}), verifier],
+    );
+    return rows[0] ? toAgentCap(rows[0]) : null;
+  },
+  async getLevel(agent, capabilityId) {
+    const { rows } = await q.query(
+      `SELECT level FROM agent_capabilities WHERE agent=$1 AND capability_id=$2`,
+      [agent, capabilityId],
+    );
+    return rows[0] ? (rows[0]!.level as CapabilityLevel) : null;
+  },
+  async listForAgent(agent) {
+    const { rows } = await q.query(
+      `SELECT * FROM agent_capabilities WHERE agent=$1 ORDER BY capability_id`,
+      [agent],
+    );
+    return rows.map(toAgentCap);
+  },
+});
+const DEFAULT_LIMITS: QuotaLimits = {
+  maxDepth: 4,
+  maxFanOut: 8,
+  maxWip: 32,
+  maxProposalsPerHour: 20,
+};
+const PROPOSAL_COLS =
+  "id, goal_id, proposer, parent_id, depth, dedup_key, title, created_at";
+const toProposal = (r: Row): ProposalRecord => ({
+  id: r.id as number,
+  goalId: r.goal_id as number,
+  proposer: r.proposer as string,
+  parentId: (r.parent_id as number | null) ?? null,
+  depth: r.depth as number,
+  dedupKey: (r.dedup_key as string | null) ?? null,
+  title: r.title as string,
+  createdAt: iso(r.created_at),
+});
+const coordination = (q: Queryable): CoordinationRepo => ({
+  async propose(b): Promise<ProposeOutcome> {
+    const limits = b.limits ?? DEFAULT_LIMITS;
+    if (b.dedupKey) {
+      const { rows } = await q.query(
+        `SELECT id FROM coordination_proposals WHERE goal_id=$1 AND dedup_key=$2 ORDER BY id LIMIT 1`,
+        [b.goalId, b.dedupKey],
+      );
+      if (rows[0]) {
+        return {
+          ok: false,
+          duplicate: true,
+          existingId: rows[0]!.id as number,
+        };
+      }
+    }
+    if (b.depth > limits.maxDepth) {
+      return { ok: false, quotaExceeded: "depth" };
+    }
+    if (b.parentId !== undefined) {
+      const { rows } = await q.query(
+        `SELECT count(*)::text AS c FROM coordination_proposals WHERE parent_id=$1`,
+        [b.parentId],
+      );
+      if (Number(rows[0]!.c) >= limits.maxFanOut) {
+        return { ok: false, quotaExceeded: "fan-out" };
+      }
+    }
+    const { rows: wip } = await q.query(
+      `SELECT count(*)::text AS c FROM coordination_proposals WHERE goal_id=$1`,
+      [b.goalId],
+    );
+    if (Number(wip[0]!.c) >= limits.maxWip) {
+      return { ok: false, quotaExceeded: "wip" };
+    }
+    const { rows: hour } = await q.query(
+      `SELECT count(*)::text AS c FROM coordination_proposals
+       WHERE proposer=$1 AND created_at > now() - interval '1 hour'`,
+      [b.proposer],
+    );
+    if (Number(hour[0]!.c) >= limits.maxProposalsPerHour) {
+      return { ok: false, quotaExceeded: "proposals/hour" };
+    }
+    try {
+      const { rows } = await q.query(
+        `INSERT INTO coordination_proposals (goal_id, proposer, parent_id, depth, dedup_key, title)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${PROPOSAL_COLS}`,
+        [
+          b.goalId,
+          b.proposer,
+          b.parentId ?? null,
+          b.depth,
+          b.dedupKey ?? null,
+          b.title,
+        ],
+      );
+      return { ok: true, proposal: toProposal(rows[0]!) };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/unique|duplicate/i.test(msg) && b.dedupKey) {
+        const { rows } = await q.query(
+          `SELECT id FROM coordination_proposals WHERE goal_id=$1 AND dedup_key=$2 ORDER BY id LIMIT 1`,
+          [b.goalId, b.dedupKey],
+        );
+        if (rows[0]) {
+          return {
+            ok: false,
+            duplicate: true,
+            existingId: rows[0]!.id as number,
+          };
+        }
+      }
+      throw e;
+    }
+  },
+  async listForGoal(goalId, limit) {
+    const { rows } = await q.query(
+      `SELECT ${PROPOSAL_COLS} FROM coordination_proposals WHERE goal_id=$1 ORDER BY id DESC LIMIT $2`,
+      [goalId, limit ?? 100],
+    );
+    return rows.map(toProposal);
+  },
+  async recordDissent(taskId, contributor, note) {
+    const { rows } = await q.query(
+      `INSERT INTO negotiation_dissents (task_id, contributor, note) VALUES ($1,$2,$3) RETURNING id`,
+      [taskId, contributor, note],
+    );
+    return rows[0]!.id as number;
+  },
+  async listDissents(taskId) {
+    const { rows } = await q.query(
+      `SELECT id, contributor, note, created_at FROM negotiation_dissents
+       WHERE task_id=$1 ORDER BY id`,
+      [taskId],
+    );
+    return rows.map((r) => ({
+      id: r.id as number,
+      contributor: r.contributor as string,
+      note: r.note as string,
+      createdAt: iso(r.created_at),
+    }));
+  },
+});
 
 const bind = (q: Queryable): Repos => ({
   messages: messages(q),
@@ -944,6 +1480,11 @@ const bind = (q: Queryable): Repos => ({
   verifications: verifications(q),
   goalEvaluations: goalEvaluations(q),
   control: control(q),
+  memories: memories(q),
+  artifacts: artifacts(q),
+  teams: teams(q),
+  capabilities: capabilities(q),
+  coordination: coordination(q),
 });
 
 export function pgStore(db: Database): Store {

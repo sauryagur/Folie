@@ -179,6 +179,11 @@ function routes(
     ],
     [
       "POST",
+      /^\/v1\/agents\/([^/]+)\/control$/,
+      async (_, req, p) => svc.queueCancel(await jsonBody(req), p),
+    ],
+    [
+      "POST",
       /^\/v1\/reports$/,
       async (_, req, p) => svc.submitReport(await jsonBody(req), p),
     ],

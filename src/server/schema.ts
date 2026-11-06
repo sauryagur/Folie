@@ -143,6 +143,8 @@ CREATE TABLE IF NOT EXISTS budget_reservations (
   state       text NOT NULL DEFAULT 'active' CHECK (state IN ('active','released')),
   created_at  timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE budget_reservations ADD COLUMN IF NOT EXISTS ref text;
+CREATE INDEX IF NOT EXISTS budget_reservations_active ON budget_reservations (budget_id) WHERE state = 'active';
 CREATE TABLE IF NOT EXISTS usage_records (
   id          serial PRIMARY KEY,
   budget_id   int NOT NULL REFERENCES budgets(id),
@@ -210,6 +212,128 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS session_id int REFERENCES sessions
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS leased_at timestamptz;
 CREATE INDEX IF NOT EXISTS messages_leased ON messages (session_id) WHERE session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS messages_unleased ON messages (recipient, id) WHERE acked_at IS NULL AND session_id IS NULL;
+-- Scoped memory (ADR 0008, R-4.1/4.2): immutable entries; ACL is enforced inside
+-- MemoryRepo.query, never by callers. Identity columns are plain text with no FK
+-- to agents, so retiring an execution cannot wipe memory (R-3.7).
+CREATE TABLE IF NOT EXISTS memories (
+  id             serial PRIMARY KEY,
+  scope          text NOT NULL CHECK (scope IN ('agent','team','goal','swarm')),
+  scope_id       text NOT NULL,
+  kind           text NOT NULL CHECK (kind IN ('semantic','episodic','procedural','claim','handoff')),
+  content        text NOT NULL,
+  data           jsonb NOT NULL DEFAULT '{}'::jsonb,
+  provenance     jsonb NOT NULL DEFAULT '{}'::jsonb,
+  origin_goal_id text,
+  portable       boolean NOT NULL DEFAULT false,
+  status         text NOT NULL DEFAULT 'active' CHECK (status IN ('active','contested','superseded')),
+  confidence     numeric NOT NULL DEFAULT 1,
+  superseded_by  int REFERENCES memories(id),
+  task_id        int,
+  created_by     text NOT NULL,
+  created_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS memories_scope ON memories (scope, scope_id, id DESC);
+CREATE TABLE IF NOT EXISTS memory_links (
+  from_id int NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  to_id   int NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  kind    text NOT NULL CHECK (kind IN ('contradicts','corroborates','supersedes','derived_from')),
+  PRIMARY KEY (from_id, to_id, kind)
+);
+-- Content-addressed artifacts (R-4.4): bytes live in PG bytea, outside any workspace,
+-- with no FK to agents/executions, so termination or retirement cannot delete them.
+-- (The volume/S3 adapter later replaces storage; sha256/ref stay unchanged.)
+CREATE TABLE IF NOT EXISTS artifacts (
+  id          serial PRIMARY KEY,
+  sha256      text NOT NULL UNIQUE,
+  ref         text NOT NULL UNIQUE,
+  data        bytea NOT NULL,
+  name        text NOT NULL DEFAULT '',
+  media_type  text NOT NULL DEFAULT 'application/octet-stream',
+  description text NOT NULL DEFAULT '',
+  producer    text NOT NULL,
+  goal_id     text,
+  task_id     int,
+  provenance  jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS artifacts_producer ON artifacts (producer, id);
+-- Coordination: teams (R-9.5), capabilities (R-10), quotas/discovery/negotiation (R-9/R-8.9).
+-- Contracts only: leader election, stall/loop detection beyond counters, live thread UI excluded.
+CREATE TABLE IF NOT EXISTS teams (
+  id            serial PRIMARY KEY,
+  name          text NOT NULL UNIQUE,
+  scope_kind    text NOT NULL CHECK (scope_kind IN ('goal','task')),
+  scope_id      text NOT NULL,
+  purpose       text NOT NULL DEFAULT '',
+  status        text NOT NULL DEFAULT 'forming' CHECK (status IN ('forming','active','dissolving','dissolved')),
+  convener      text REFERENCES agents(name),
+  budget_id     int REFERENCES budgets(id),
+  min_members   int NOT NULL DEFAULT 1,
+  charter       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  dissolved_at  timestamptz
+);
+CREATE INDEX IF NOT EXISTS teams_status ON teams (status, id);
+CREATE INDEX IF NOT EXISTS teams_scope ON teams (scope_kind, scope_id, status);
+CREATE TABLE IF NOT EXISTS team_members (
+  team_id         int NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  agent           text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+  label           text NOT NULL DEFAULT '',
+  responsibilities text NOT NULL DEFAULT '',
+  PRIMARY KEY (team_id, agent)
+);
+CREATE INDEX IF NOT EXISTS team_members_agent ON team_members (agent);
+CREATE TABLE IF NOT EXISTS capabilities (
+  id          serial PRIMARY KEY,
+  name        text NOT NULL UNIQUE,
+  version     text NOT NULL DEFAULT '1',
+  description text NOT NULL DEFAULT '',
+  risk_class  text NOT NULL DEFAULT 'R0' CHECK (risk_class IN ('R0','R1','R2','R3','R4','R5','R6','R7')),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS agent_capabilities (
+  id             serial PRIMARY KEY,
+  agent          text NOT NULL REFERENCES agents(name) ON DELETE CASCADE,
+  capability_id  int NOT NULL REFERENCES capabilities(id) ON DELETE CASCADE,
+  level          text NOT NULL DEFAULT 'declared' CHECK (level IN ('declared','assessed','verified')),
+  probe_result   jsonb,
+  verifier       text REFERENCES agents(name),
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (agent, capability_id)
+);
+CREATE INDEX IF NOT EXISTS agent_capabilities_agent ON agent_capabilities (agent);
+CREATE INDEX IF NOT EXISTS agent_capabilities_cap ON agent_capabilities (capability_id, level);
+CREATE TABLE IF NOT EXISTS coordination_proposals (
+  id          serial PRIMARY KEY,
+  goal_id     int NOT NULL,
+  proposer    text NOT NULL REFERENCES agents(name),
+  parent_id   int,
+  depth       int NOT NULL DEFAULT 0,
+  dedup_key   text,
+  title       text NOT NULL DEFAULT '',
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS proposals_dedup ON coordination_proposals (goal_id, dedup_key) WHERE dedup_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS proposals_proposer ON coordination_proposals (proposer, created_at DESC);
+CREATE INDEX IF NOT EXISTS proposals_goal ON coordination_proposals (goal_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS proposals_parent ON coordination_proposals (parent_id) WHERE parent_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS negotiation_dissents (
+  id          serial PRIMARY KEY,
+  task_id     int NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  contributor text NOT NULL REFERENCES agents(name),
+  note        text NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS dissents_task ON negotiation_dissents (task_id, id);
+-- Leader-election lease for the background loops (R-6.6): one row, holder + TTL expiry.
+-- Only the holder runs dispatch/reconcile; replicas serve reads. Seeded idempotently here
+-- (re-run on every migrate) so a fresh database starts leaderless.
+CREATE TABLE IF NOT EXISTS leader_state (
+  id         int PRIMARY KEY CHECK (id = 1),
+  holder     text NOT NULL DEFAULT '',
+  expires_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO leader_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 -- (agents.state remains the execution view for compatibility; status is 'active' | 'retired' for token checks)
 `;
 
