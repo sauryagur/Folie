@@ -9,6 +9,7 @@ export type Command =
   | { kind: "publish"; topic: string; body: string }
   | { kind: "subscribe" | "unsubscribe"; topic: string; agent: string }
   | { kind: "op"; op: AgentOp; agent: string }
+  | { kind: "cancel"; agent: string; reason: string }
   | { kind: "view"; view: View }
   | { kind: "help" }
   | { kind: "quit" };
@@ -16,7 +17,7 @@ export type Command =
 export type Parsed = Command | { kind: "error"; message: string };
 
 export const HELP =
-  "submit [@agent] <goal> | send [@agent] <text> | publish <topic> <text> | subscribe|unsubscribe <topic> [agent] | suspend|resume|delete [agent] | view <stream|inbox|topics|reports> | quit";
+  "submit [@agent] <goal> | send [@agent] <text> | publish <topic> <text> | subscribe|unsubscribe <topic> [agent] | suspend|resume|delete [agent] | cancel <agent> [reason] | view <stream|inbox|topics|reports> | quit";
 
 const err = (message: string): Parsed => ({ kind: "error", message });
 
@@ -84,6 +85,12 @@ export function parseCommand(input: string, selected: string | null): Parsed {
         ? { kind: "op", op: verb, agent }
         : err(`${verb}: no agent selected`);
     }
+    case "cancel": {
+      const agent = args[0] ?? selected;
+      if (!agent) return err("usage: cancel <agent> [reason]");
+      const reason = args.slice(agent === args[0] ? 1 : 0).join(" ") || "cancelled from TUI";
+      return { kind: "cancel", agent, reason };
+    }
     case "view": {
       const v = args[0] as View | undefined;
       return v && VIEWS.includes(v)
@@ -97,7 +104,7 @@ export function parseCommand(input: string, selected: string | null): Parsed {
 
 export type CommandApi = Pick<
   FolieClient,
-  "submitGoal" | "send" | "publish" | "subscribe" | "unsubscribe" | "agentOp"
+  "submitGoal" | "send" | "publish" | "subscribe" | "unsubscribe" | "agentOp" | "queueCancel"
 >;
 
 /** Runs a server-side command and returns the one-line result to show. Throws on server errors. */
@@ -135,6 +142,10 @@ export async function execute(
     case "op": {
       const { agent, state } = await api.agentOp(cmd.op, cmd.agent);
       return `${agent}: ${state}`;
+    }
+    case "cancel": {
+      const { cursor } = await api.queueCancel(cmd.agent, cmd.reason);
+      return `cancel queued for ${cmd.agent} (cursor ${cursor})`;
     }
   }
 }

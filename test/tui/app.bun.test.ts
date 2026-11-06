@@ -75,6 +75,10 @@ describe.skipIf(!process.versions.bun)("TUI app", () => {
       calls.push(`${op} ${agent}`),
       { agent, state: "suspended" }
     ),
+    queueCancel: async (agent, reason) => (
+      calls.push(`cancel ${agent} ${reason}`),
+      { cursor: 1 }
+    ),
   };
 
   /** Key handlers start promise chains (poll, command). The fakes resolve at once, so draining and painting is enough. */

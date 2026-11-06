@@ -12,6 +12,7 @@ import type {
   TopicInfo,
   WorkItem,
   WorkItemState,
+  LedgerEvent,
 } from "../shared/types";
 import type { Database, Queryable, Row } from "./db";
 import type {
@@ -47,6 +48,7 @@ import type {
   ArtifactRepo,
   CapabilityLevel,
   MemoryRepo,
+  LedgerRepo,
 } from "./store";
 import { artifactHash, artifactRef, sha256Of } from "./memory";
 import { generateExecutionId, generateToken, hashToken } from "./auth";
@@ -1465,6 +1467,78 @@ const coordination = (q: Queryable): CoordinationRepo => ({
   },
 });
 
+const LEDGER_COLS =
+  "id, type, aggregate, aggregate_id, actor, payload, correlation_id, causation_id, traceparent, tracestate, created_at";
+
+const toLedgerEvent = (r: Row): LedgerEvent => ({
+  id: r.id as number,
+  type: r.type as string,
+  aggregate: r.aggregate as string,
+  aggregateId: r.aggregate_id as string,
+  actor: r.actor as string,
+  payload: json(r.payload),
+  correlationId: (r.correlation_id as string | null) ?? null,
+  causationId: (r.causation_id as string | null) ?? null,
+  traceparent: (r.traceparent as string | null) ?? null,
+  tracestate: (r.tracestate as string | null) ?? null,
+  createdAt: iso(r.created_at),
+});
+
+const ledger = (q: Queryable): LedgerRepo => ({
+  async append(b) {
+    const { rows } = await q.query(
+      `INSERT INTO events (type, aggregate, aggregate_id, actor, payload, correlation_id, causation_id, traceparent, tracestate)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9) RETURNING id`,
+      [
+        b.type,
+        b.aggregate,
+        b.aggregateId,
+        b.actor,
+        JSON.stringify(b.payload ?? {}),
+        b.correlationId ?? null,
+        b.causationId ?? null,
+        b.traceparent ?? null,
+        b.tracestate ?? null,
+      ],
+    );
+    return Number(rows[0]!.id);
+  },
+  async list({ after, types, goal, agent, limit }) {
+    const n = Math.min(Math.max(limit ?? 200, 1), 1000);
+    const args: unknown[] = [after ?? 0];
+    let typeFilter = "";
+    if (types && types.length > 0) {
+      const parts: string[] = [];
+      for (const t of types) {
+        args.push(t);
+        const idx = args.length;
+        if (t.endsWith(".*")) {
+          parts.push(`type LIKE $${idx} || '%'`);
+          args[idx - 1] = t.slice(0, -1);
+        } else {
+          parts.push(`type = $${idx}`);
+        }
+      }
+      typeFilter = `AND (${parts.join(" OR ")})`;
+    }
+    args.push(goal === undefined ? null : String(goal));
+    const goalIdx = args.length;
+    args.push(agent ?? null);
+    const agentIdx = args.length;
+    args.push(n);
+    const limitIdx = args.length;
+    const { rows } = await q.query(
+      `SELECT ${LEDGER_COLS} FROM events
+       WHERE id > $1 ${typeFilter}
+         AND ($${goalIdx}::text IS NULL OR payload->>'workItemId' = $${goalIdx} OR (aggregate = 'goal' AND aggregate_id = $${goalIdx}))
+         AND ($${agentIdx}::text IS NULL OR actor = $${agentIdx} OR payload->>'agent' = $${agentIdx})
+       ORDER BY id LIMIT $${limitIdx}`,
+      args,
+    );
+    return rows.map(toLedgerEvent);
+  },
+});
+
 const bind = (q: Queryable): Repos => ({
   messages: messages(q),
   workItems: workItems(q),
@@ -1485,6 +1559,7 @@ const bind = (q: Queryable): Repos => ({
   teams: teams(q),
   capabilities: capabilities(q),
   coordination: coordination(q),
+  ledger: ledger(q),
 });
 
 export function pgStore(db: Database): Store {

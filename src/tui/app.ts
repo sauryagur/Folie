@@ -207,7 +207,16 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
       const cmd = confirmCancelSession(requestCancelSession(inspector, confirmed));
       if (!cmd.sessionId) state = withStatus(state, "cancel session: no session loaded");
       else if (!cmd.confirmed) state = withStatus(state, cancelPrompt(cmd));
-      else state = withStatus(state, `cancel session confirmed (command-only) for ${cmd.agent}/${cmd.sessionId}: queueCancel has no HTTP route yet, so nothing was executed`);
+      else if (deps.api.queueCancel === undefined)
+        state = withStatus(state, `cancel session: queueCancel unavailable for ${cmd.agent}/${cmd.sessionId}`);
+      else {
+        try {
+          const { cursor } = await deps.api.queueCancel(cmd.agent!, `cancel session ${cmd.sessionId}`);
+          state = withStatus(state, `cancel queued for ${cmd.agent}/${cmd.sessionId} (cursor ${cursor})`);
+        } catch (e) {
+          state = withStatus(state, `cancel session: ${e instanceof Error ? e.message : e}`);
+        }
+      }
       draw();
       return;
     }

@@ -71,6 +71,14 @@ function fakeApi(states: WorkItemView[], topicList: TopicInfo[] = []) {
           topicList.find((t) => t.topic === topic)?.subscribers.length ?? 0,
       }
     ),
+    queueCancel: async (agent, reason) => (
+      topicCalls.push(`cancel ${agent} ${reason}`),
+      { cursor: 3 }
+    ),
+    agentOp: async (op, agent) => (
+      topicCalls.push(`${op} ${agent}`),
+      { agent, state: op === "suspend" ? "suspended" : "running" }
+    ),
   };
   return { api, submitted, topicCalls, polls: () => polls };
 }

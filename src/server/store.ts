@@ -17,6 +17,8 @@ import type {
   TopicInfo,
   WorkItem,
   WorkItemState,
+  LedgerEvent,
+  LedgerQuery,
 } from "../shared/types";
 import type {
   ArtifactPutInput,
@@ -453,6 +455,22 @@ export interface CoordinationRepo {
   recordDissent(taskId: number, contributor: string, note: string): Promise<number>;
   listDissents(taskId: number): Promise<{ id: number; contributor: string; note: string; createdAt: string }[]>;
 }
+/** Append-only event ledger: one row per domain transition, written in the same tx as the state change. */
+export interface LedgerRepo {
+  append(b: {
+    type: string;
+    aggregate: string;
+    aggregateId: string;
+    actor: string;
+    payload: Record<string, unknown>;
+    correlationId?: string;
+    causationId?: string;
+    traceparent?: string | null;
+    tracestate?: string | null;
+  }): Promise<number>;
+  list(q: LedgerQuery): Promise<LedgerEvent[]>;
+}
+
 export interface QuotaLimits {
   maxDepth: number;
   maxFanOut: number;
@@ -480,6 +498,7 @@ export interface Repos {
   teams: TeamRepo;
   capabilities: CapabilityRepo;
   coordination: CoordinationRepo;
+  ledger: LedgerRepo;
 }
 
 export interface Store extends Repos {

@@ -12,6 +12,8 @@ export type Api = Pick<
   | "subscribe"
   | "unsubscribe"
   | "publish"
+  | "queueCancel"
+  | "agentOp"
 >;
 export type Out = (line: string) => void;
 
@@ -167,3 +169,32 @@ export async function publish(
   out(`delivered to ${delivered} subscriber(s) of ${topic}`);
   return 0;
 }
+
+export async function cancel(
+  api: Api,
+  args: string[],
+  out: Out,
+): Promise<number> {
+  const [agent, ...words] = args;
+  if (!agent) throw new Error("usage: folie cancel <agent> [reason]");
+  const reason = words.join(" ").trim() || "cancelled from CLI";
+  const { cursor } = await api.queueCancel(agent, reason);
+  out(`cancel queued for ${agent} (cursor ${cursor})`);
+  return 0;
+}
+
+async function op(
+  api: Api,
+  args: string[],
+  out: Out,
+  verb: "pause" | "resume",
+): Promise<number> {
+  const [agent] = args;
+  if (!agent || args.length !== 1) throw new Error(`usage: folie ${verb} <agent>`);
+  const { agent: name, state } = await api.agentOp(verb === "pause" ? "suspend" : "resume", agent);
+  out(`${name}: ${state}`);
+  return 0;
+}
+
+export const pause = (api: Api, args: string[], out: Out) => op(api, args, out, "pause");
+export const resume = (api: Api, args: string[], out: Out) => op(api, args, out, "resume");

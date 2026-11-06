@@ -156,4 +156,11 @@ export class FolieClient {
       `/v1/sessions/attempts${queryString({ agent, scope, exclude: excludeSession })}`,
     );
   }
+  queueCancel(agent: string, reason: string) {
+    return this.req<{ cursor: number }>(
+      "POST",
+      `/v1/agents/${encodeURIComponent(agent)}/control`,
+      { agent, reason },
+    );
+  }
 }

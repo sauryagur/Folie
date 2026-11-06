@@ -36,7 +36,7 @@ export async function testStore(): Promise<{
   const db = await testDatabase();
   const reset = async () =>
     void (await db.query(
-      "TRUNCATE agents, work_items, messages, sessions, reports, session_events RESTART IDENTITY CASCADE",
+      "TRUNCATE agents, work_items, messages, sessions, reports, session_events, events RESTART IDENTITY CASCADE",
     ));
   return { db, store: pgStore(db), reset };
 }

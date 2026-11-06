@@ -1,7 +1,10 @@
 #!/usr/bin/env bun
 import {
   agents,
+  cancel,
+  pause,
   publish,
+  resume,
   status,
   submit,
   subscribe,
@@ -46,6 +49,9 @@ const commands: Record<string, Command> = {
   subscribe: viaServer(subscribe),
   unsubscribe: viaServer(unsubscribe),
   publish: viaServer(publish),
+  cancel: viaServer(cancel),
+  pause: viaServer(pause),
+  resume: viaServer(resume),
 };
 
 const [name, ...args] = process.argv.slice(2);

@@ -37,6 +37,26 @@ export interface Metrics {
   observeInboxDepth(
     read: () => Promise<{ agent: string; depth: number }[]>,
   ): void;
+  /** One stored task state transition (e.g. available -> claimed). */
+  taskTransition(e: { from: string; to: string }): void;
+  /** A failed session's work parked; reason is a bounded outcome value only. */
+  taskFailed(e: { reason: string }): void;
+  /** Create-to-lease latency for one leased message. */
+  messageDeliveryLatency(e: { agent: string; ms: number }): void;
+  /** A publish that reached zero subscribers. */
+  publicationUndelivered(): void;
+  /** One recorded verdict; kind is a bounded constant (never free-text check). */
+  verificationResult(e: { kind: string; result: string }): void;
+  /** Budget flipped to exhausted (once per flip). */
+  budgetExhausted(e: { dim: string }): void;
+  /** Budget committed past its limit (emitted with exhausted on the same flip). */
+  budgetOverrun(e: { dim: string }): void;
+  /** One accepted task proposal. */
+  proposalRecorded(e: { outcome: string }): void;
+  /** One stored goal evaluation verdict. */
+  goalEvaluated(e: { outcome: string }): void;
+  /** LLM cost whose basis is known (recordUsage); reuses folie.llm.cost. */
+  llmCost(e: { amount: number; basis: string }): void;
 }
 
 export interface Observability {
@@ -48,6 +68,16 @@ export const noopMetrics: Metrics = {
   sessionReported() {},
   toolEnded() {},
   observeInboxDepth() {},
+  taskTransition() {},
+  taskFailed() {},
+  messageDeliveryLatency() {},
+  publicationUndelivered() {},
+  verificationResult() {},
+  budgetExhausted() {},
+  budgetOverrun() {},
+  proposalRecorded() {},
+  goalEvaluated() {},
+  llmCost() {},
 };
 export const noopObservability = (): Observability => ({
   tracer: trace.getTracer(TRACER_NAME),
@@ -127,6 +157,34 @@ export function createTelemetry(opts: TelemetryOptions): Telemetry {
   const depth = meter.createObservableGauge("folie.inbox.depth", {
     description: "Unread messages per agent",
   });
+  const taskTransition = meter.createCounter("folie.task.transition", {
+    description: "Task state transitions",
+  });
+  const taskFailed = meter.createCounter("folie.task.failed", {
+    description: "Tasks parked by a failed session",
+  });
+  const deliveryLatency = meter.createHistogram("folie.message.delivery.latency", {
+    description: "Time from message creation to lease",
+    unit: "ms",
+  });
+  const undelivered = meter.createCounter("folie.publication.undelivered", {
+    description: "Publishes that reached zero subscribers",
+  });
+  const verificationResult = meter.createCounter("folie.verification.result", {
+    description: "Recorded verification verdicts",
+  });
+  const budgetExhausted = meter.createCounter("folie.budget.exhausted", {
+    description: "Budgets flipped to exhausted",
+  });
+  const budgetOverrun = meter.createCounter("folie.budget.overrun", {
+    description: "Budgets committed past their limit",
+  });
+  const proposal = meter.createCounter("folie.proposal", {
+    description: "Task proposals by outcome",
+  });
+  const goalOutcome = meter.createCounter("folie.goal.outcome", {
+    description: "Goal evaluation verdicts",
+  });
 
   const metrics: Metrics = {
     sessionReported({ agent, outcome, usage, inboxLatenciesMs }) {
@@ -155,6 +213,36 @@ export function createTelemetry(opts: TelemetryOptions): Telemetry {
         for (const { agent, depth: n } of await read())
           result.observe(n, { agent_name: agent });
       });
+    },
+    taskTransition({ from, to }) {
+      taskTransition.add(1, { from, to });
+    },
+    taskFailed({ reason }) {
+      taskFailed.add(1, { reason });
+    },
+    messageDeliveryLatency({ agent, ms }) {
+      deliveryLatency.record(ms, { agent_name: agent });
+    },
+    publicationUndelivered() {
+      undelivered.add(1);
+    },
+    verificationResult({ kind, result }) {
+      verificationResult.add(1, { "verification.kind": kind, result });
+    },
+    budgetExhausted({ dim }) {
+      budgetExhausted.add(1, { dim });
+    },
+    budgetOverrun({ dim }) {
+      budgetOverrun.add(1, { dim });
+    },
+    proposalRecorded({ outcome }) {
+      proposal.add(1, { outcome });
+    },
+    goalEvaluated({ outcome }) {
+      goalOutcome.add(1, { outcome });
+    },
+    llmCost({ amount, basis }) {
+      cost.add(amount, { cost_basis: basis });
     },
   };
 

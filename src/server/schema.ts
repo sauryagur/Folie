@@ -334,6 +334,23 @@ CREATE TABLE IF NOT EXISTS leader_state (
   expires_at timestamptz NOT NULL DEFAULT now()
 );
 INSERT INTO leader_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+-- Append-only event ledger (ADR 0004): one row per domain transition, written in the same
+-- transaction as the state change it records. No FKs so migration order never matters.
+CREATE TABLE IF NOT EXISTS events (
+  id            serial PRIMARY KEY,
+  type          text NOT NULL,
+  aggregate     text NOT NULL,
+  aggregate_id  text NOT NULL,
+  actor         text NOT NULL,
+  payload       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  correlation_id text,
+  causation_id  text,
+  traceparent   text,
+  tracestate    text,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS events_aggregate ON events (aggregate, aggregate_id, id);
+CREATE INDEX IF NOT EXISTS events_id ON events (id);
 -- (agents.state remains the execution view for compatibility; status is 'active' | 'retired' for token checks)
 `;
 

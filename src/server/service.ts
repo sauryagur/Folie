@@ -47,6 +47,8 @@ import {
   type TopicInfo,
   type WorkItem,
   type WorkItemView,
+  type LedgerEvent,
+  type LedgerQuery,
 } from "../shared/types";
 import {
   activeSpanIds,
@@ -137,6 +139,30 @@ export class SwarmService {
   ) {
     this.obs = obs ?? noopObservability();
   }
+  // --- ledger (ADR 0004): appended inside the same tx as the state change ---
+
+  private ledgerActor(principal: Principal, preferred: string): string {
+    if (preferred === "human") return "human:operator";
+    if (preferred === "system") return "system";
+    if (principal.kind === "agent") return `agent:${principal.name}`;
+    if (principal.kind === "operator") return "human:operator";
+    return `agent:${preferred}`;
+  }
+
+
+
+  /** Stream: operator sees all (optionally filtered); agents are forced to their own rows. */
+  async stream(q: LedgerQuery, principal: Principal): Promise<LedgerEvent[]> {
+    const after = q.after ?? 0;
+    if (!Number.isInteger(after) || after < 0)
+      throw new ValidationError("after: non-negative integer required");
+    if (principal.kind === "agent") {
+      // Force to own agent; ignore any mismatched q.agent (filter, not 403, so streams still open).
+      return this.store.ledger.list({ ...q, after, agent: principal.name });
+    }
+    if (q.agent !== undefined) agentName(q.agent, "agent");
+    return this.store.ledger.list({ ...q, after });
+  }
 
   // --- helpers for auth ---
 
@@ -225,11 +251,19 @@ export class SwarmService {
       async (span) => {
         const trace = storableTrace();
         if (to === undefined) {
-          const workItem = await this.store.workItems.create(
-            goal,
-            "queued",
-            trace,
-          );
+          const workItem = await this.store.transaction(async (r) => {
+            const created = await r.workItems.create(goal, "queued", trace);
+            await r.ledger.append({
+              type: "goal.created",
+              aggregate: "goal",
+              aggregateId: String(created.id),
+              actor: this.ledgerActor(principal, "human"),
+              payload: { workItemId: created.id, goal, agent: "human" },
+              traceparent: trace.traceparent,
+              tracestate: trace.tracestate,
+            });
+            return created;
+          });
           span.setAttribute("work_item_id", workItem.id);
           return { workItem, message: null };
         }
@@ -250,6 +284,15 @@ export class SwarmService {
             body: goal,
             workItemId: workItem.id,
             trace,
+          });
+          await r.ledger.append({
+            type: "goal.created",
+            aggregate: "goal",
+            aggregateId: String(workItem.id),
+            actor: this.ledgerActor(principal, "human"),
+            payload: { workItemId: workItem.id, goal, agent: to },
+            traceparent: trace.traceparent,
+            tracestate: trace.tracestate,
           });
           return { workItem, message };
         });
@@ -332,13 +375,26 @@ export class SwarmService {
           if (!exists) throw new NotFoundError(`unknown agent ${to}`);
           // derive sender from principal when possible: agents send as themselves, operator as "human".
           const sender = principal.kind === "agent" ? principal.name : from;
-          return r.messages.send({
+          const sent = await r.messages.send({
             from: sender,
             to,
             body,
             requestId: id,
             trace: storableTrace(),
           });
+          if (!sent.duplicate) {
+            const t = storableTrace();
+            await r.ledger.append({
+              type: "message.sent",
+              aggregate: "message",
+              aggregateId: String(sent.id),
+              actor: this.ledgerActor(principal, sender),
+              payload: { agent: sender, from: sender, to, workItemId: sent.workItemId },
+              traceparent: t.traceparent,
+              tracestate: t.tracestate,
+            });
+          }
+          return sent;
         });
         if (m.duplicate) span.setAttribute("folie.duplicate", true);
         return m;
@@ -459,14 +515,25 @@ export class SwarmService {
       },
       async (span) => {
         const sender = principal.kind === "agent" ? principal.name : from;
-        const { copies, duplicate } = await this.store.topics.publish(
-          t,
-          sender,
-          body,
-          { requestId: id, trace: storableTrace() },
-        );
+        const trace = storableTrace();
+        const { copies, duplicate } = await this.store.transaction(async (r) => {
+          const out = await r.topics.publish(t, sender, body, { requestId: id, trace });
+          if (!out.duplicate) {
+            await r.ledger.append({
+              type: "topic.published",
+              aggregate: "topic",
+              aggregateId: t,
+              actor: this.ledgerActor(principal, sender),
+              payload: { agent: sender, topic: t, delivered: out.copies.length },
+              traceparent: trace.traceparent,
+              tracestate: trace.tracestate,
+            });
+          }
+          return out;
+        });
         span.setAttribute("folie.delivered", copies.length);
         if (duplicate) span.setAttribute("folie.duplicate", true);
+        if (copies.length === 0) this.obs.metrics.publicationUndelivered();
         return {
           delivered: copies.length,
           ...(duplicate ? { duplicate: true } : {}),
@@ -514,6 +581,7 @@ export class SwarmService {
       "folie.session.start",
       { attributes: { agent_name: agent } },
       async (span) => {
+        let leasedCreatedAt: string[] = [];
         const s = await this.store.transaction(async (r) => {
           if (clientRequestId !== undefined) {
             const prior = await r.sessions.getByClientRequest(
@@ -541,8 +609,15 @@ export class SwarmService {
             throw new ValidationError(
               "messageIds: not all are unleased messages of this agent",
             );
+          leasedCreatedAt = leased.map((m) => m.createdAt);
           return created;
         });
+        const nowMs = Date.now();
+        for (const createdAt of leasedCreatedAt) {
+          const ms = nowMs - Date.parse(createdAt);
+          if (Number.isFinite(ms) && ms >= 0)
+            this.obs.metrics.messageDeliveryLatency({ agent, ms });
+        }
         span.setAttribute("session_id", s.sessionId);
         return {
           sessionId: s.sessionId,
@@ -578,11 +653,27 @@ export class SwarmService {
       throw new ValidationError(
         `workItemId: unknown work item ${req.workItemId}`,
       );
-    return this.store.tasks.propose({
-      workItemId: req.workItemId,
-      title,
-      spec,
+    const trace = storableTrace();
+    const task = await this.store.transaction(async (r) => {
+      const created = await r.tasks.propose({
+        workItemId: req.workItemId,
+        title,
+        spec,
+      });
+      await r.ledger.append({
+        type: "task.proposed",
+        aggregate: "task",
+        aggregateId: String(created.id),
+        actor: this.ledgerActor(principal, agent),
+        payload: { agent, workItemId: req.workItemId, taskId: created.id, title },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return created;
     });
+    this.obs.metrics.taskTransition({ from: "none", to: "available" });
+    this.obs.metrics.proposalRecorded({ outcome: "accepted" });
+    return task;
   }
 
   async claimTask(
@@ -595,13 +686,27 @@ export class SwarmService {
     this.assertAgentMatches(principal, agent);
     if (!Number.isInteger(req.taskId) || req.taskId <= 0)
       throw new ValidationError("taskId: positive integer required");
-    const out = await this.store.tasks.claim(req.taskId, agent, 30_000);
-    if (!out)
-      throw new ValidationError(
-        `taskId: not available for claim ${req.taskId}`,
-      );
-    if ((out.task.owner ?? agent) !== agent)
-      throw new ValidationError("taskId: claimed by another agent");
+    const trace = storableTrace();
+    const out = await this.store.transaction(async (r) => {
+      const claimed = await r.tasks.claim(req.taskId, agent, 30_000);
+      if (!claimed)
+        throw new ValidationError(
+          `taskId: not available for claim ${req.taskId}`,
+        );
+      if ((claimed.task.owner ?? agent) !== agent)
+        throw new ValidationError("taskId: claimed by another agent");
+      await r.ledger.append({
+        type: "task.claimed",
+        aggregate: "task",
+        aggregateId: String(claimed.task.id),
+        actor: this.ledgerActor(principal, agent),
+        payload: { agent, workItemId: claimed.task.workItemId, taskId: claimed.task.id, fence: claimed.fence },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return claimed;
+    });
+    this.obs.metrics.taskTransition({ from: "available", to: "claimed" });
     return {
       taskId: out.task.id,
       agent,
@@ -624,8 +729,22 @@ export class SwarmService {
     const t = await this.store.tasks.get(req.taskId);
     if (!t || t.owner !== agent)
       throw new ValidationError("taskId: not claimed by this agent");
-    const started = await this.store.tasks.start(req.taskId, req.fence);
-    if (!started) throw new ValidationError("fence: stale");
+    const trace = storableTrace();
+    const started = await this.store.transaction(async (r) => {
+      const out = await r.tasks.start(req.taskId, req.fence);
+      if (!out) throw new ValidationError("fence: stale");
+      await r.ledger.append({
+        type: "task.started",
+        aggregate: "task",
+        aggregateId: String(out.id),
+        actor: this.ledgerActor(principal, agent),
+        payload: { agent, workItemId: out.workItemId, taskId: out.id, fence: req.fence },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return out;
+    });
+    this.obs.metrics.taskTransition({ from: "claimed", to: "running" });
     return started;
   }
 
@@ -648,12 +767,22 @@ export class SwarmService {
       Array.isArray(req.result)
     )
       throw new ValidationError("result: object required");
-    const submitted = await this.store.tasks.submit(
-      req.taskId,
-      req.fence,
-      req.result,
-    );
-    if (!submitted) throw new ValidationError("fence: stale");
+    const trace = storableTrace();
+    const submitted = await this.store.transaction(async (r) => {
+      const out = await r.tasks.submit(req.taskId, req.fence, req.result);
+      if (!out) throw new ValidationError("fence: stale");
+      await r.ledger.append({
+        type: "task.submitted",
+        aggregate: "task",
+        aggregateId: String(out.id),
+        actor: this.ledgerActor(principal, agent),
+        payload: { agent, workItemId: out.workItemId, taskId: out.id, fence: req.fence },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return out;
+    });
+    this.obs.metrics.taskTransition({ from: "running", to: "submitted" });
     return submitted;
   }
   /**
@@ -678,11 +807,24 @@ export class SwarmService {
       );
     const va = await this.store.agents.get(verifier);
     if (!va) throw new ValidationError(`verifier: unknown agent ${verifier}`);
-    return this.store.verifications.request({
-      taskId: req.taskId,
-      check,
-      verifier,
-      required: req.required ?? true,
+    const trace = storableTrace();
+    return this.store.transaction(async (r) => {
+      const out = await r.verifications.request({
+        taskId: req.taskId,
+        check,
+        verifier,
+        required: req.required ?? true,
+      });
+      await r.ledger.append({
+        type: "verification.requested",
+        aggregate: "verification",
+        aggregateId: String(out.id),
+        actor: this.ledgerActor(principal, verifier),
+        payload: { agent: verifier, workItemId: t.workItemId, taskId: req.taskId, check, verifier },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return out;
     });
   }
 
@@ -725,23 +867,27 @@ export class SwarmService {
       throw new ValidationError(
         "independence: verifier cannot be the producer",
       );
-    const out = await this.store.verifications.recordVerdict({
-      verificationId: req.verificationId,
-      verdict: req.verdict,
-      confidence: req.confidence,
-      evidence: req.evidence,
+    const trace = storableTrace();
+    const out = await this.store.transaction(async (r) => {
+      const decided = await r.verifications.recordVerdict({
+        verificationId: req.verificationId,
+        verdict: req.verdict,
+        confidence: req.confidence,
+        evidence: req.evidence,
+      });
+      if (!decided) throw new ValidationError("verificationId: not pending");
+      await r.ledger.append({
+        type: "verification.verdict",
+        aggregate: "verification",
+        aggregateId: String(decided.id),
+        actor: this.ledgerActor(principal, verifier),
+        payload: { agent: verifier, workItemId: task?.workItemId ?? null, taskId: v.taskId, verdict: req.verdict },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return decided;
     });
-    if (!out) throw new ValidationError("verificationId: not pending");
-    // Aggregate: exactly the required checks passing moves submitted -> completed. Failures/inconclusive park it.
-    const rows = await this.store.verifications.listForTask(v.taskId);
-    const required = rows.filter((r) => r.required);
-    const passes = required.filter((r) => r.status === "passed").length;
-    const failures = required.filter((r) => r.status === "failed").length;
-    if (failures > 0) {
-      await this.store.verifications.get(out.id);
-    } else if (required.length > 0 && passes === required.length) {
-      await this.store.tasks.get(v.taskId);
-    }
+    this.obs.metrics.verificationResult({ kind: "contract", result: req.verdict });
     return out;
   }
 
@@ -762,11 +908,26 @@ export class SwarmService {
     void taskRows;
     const verdict = "not_achieved" as const;
     const caveats = ["no verified task yet"];
-    return this.store.goalEvaluations.record({
-      workItemId: req.workItemId,
-      verdict,
-      caveats,
+    const trace = storableTrace();
+    const evaluated = await this.store.transaction(async (r) => {
+      const recorded = await r.goalEvaluations.record({
+        workItemId: req.workItemId,
+        verdict,
+        caveats,
+      });
+      await r.ledger.append({
+        type: "goal.evaluated",
+        aggregate: "goal",
+        aggregateId: String(req.workItemId),
+        actor: this.ledgerActor(principal, "human"),
+        payload: { workItemId: req.workItemId, verdict },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return recorded;
     });
+    this.obs.metrics.goalEvaluated({ outcome: evaluated.verdict });
+    return evaluated;
   }
   /**
    * Control watcher (R-2.4/R-2.5): the shim long-polls `GET /v1/agents/me/control?after=` on an
@@ -806,10 +967,19 @@ export class SwarmService {
     const reason = text(req.reason, "reason");
     const exists = await this.store.agents.get(who);
     if (!exists) throw new NotFoundError(`unknown agent ${who}`);
-    const id = await this.store.control.queue({
-      agent: who,
-      type: "cancel",
-      reason,
+    const trace = storableTrace();
+    const id = await this.store.transaction(async (r) => {
+      const cursor = await r.control.queue({ agent: who, type: "cancel", reason });
+      await r.ledger.append({
+        type: "control.cancel_queued",
+        aggregate: "agent",
+        aggregateId: who,
+        actor: this.ledgerActor(principal, "human"),
+        payload: { agent: who, reason, cursor },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return cursor;
     });
     return { cursor: id };
   }
@@ -845,10 +1015,23 @@ export class SwarmService {
       throw new ValidationError(
         `dim: unknown dimension ${JSON.stringify(dim)}`,
       );
-    return this.store.budgets.create({
-      name,
-      limitAmount: this.amountOf(req.limitAmount, "limitAmount"),
-      dim,
+    const trace = storableTrace();
+    return this.store.transaction(async (r) => {
+      const out = await r.budgets.create({
+        name,
+        limitAmount: this.amountOf(req.limitAmount, "limitAmount"),
+        dim,
+      });
+      await r.ledger.append({
+        type: "budget.created",
+        aggregate: "budget",
+        aggregateId: String(out.id),
+        actor: this.ledgerActor(principal, "human"),
+        payload: { budgetId: out.id, name, dim },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return out;
     });
   }
 
@@ -860,15 +1043,28 @@ export class SwarmService {
     if (!Number.isInteger(req.parentId) || req.parentId <= 0)
       throw new ValidationError("parentId: positive integer required");
     const name = text(req.name, "name");
-    const child = await this.store.budgets.carveOut(
-      req.parentId,
-      name,
-      this.amountOf(req.limitAmount, "limitAmount"),
-    );
-    if (!child)
-      throw new ValidationError(
-        "insufficient_budget: parent headroom cannot cover this carve-out",
+    const trace = storableTrace();
+    const child = await this.store.transaction(async (r) => {
+      const out = await r.budgets.carveOut(
+        req.parentId,
+        name,
+        this.amountOf(req.limitAmount, "limitAmount"),
       );
+      if (!out)
+        throw new ValidationError(
+          "insufficient_budget: parent headroom cannot cover this carve-out",
+        );
+      await r.ledger.append({
+        type: "budget.carved",
+        aggregate: "budget",
+        aggregateId: String(out.id),
+        actor: this.ledgerActor(principal, "human"),
+        payload: { budgetId: out.id, parentId: req.parentId, name },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return out;
+    });
     return child;
   }
 
@@ -881,13 +1077,31 @@ export class SwarmService {
       throw new ValidationError("budgetId: positive integer required");
     if (!["estimated", "measured", "external_charge"].includes(req.basis))
       throw new ValidationError(`basis: unknown ${JSON.stringify(req.basis)}`);
-    const out = await this.store.budgets.commit(
-      req.budgetId,
-      this.amountOf(req.amount, "amount"),
-      req.basis,
-    );
-    if (!out)
-      throw new ValidationError(`budgetId: unknown or closed ${req.budgetId}`);
+    const amount = this.amountOf(req.amount, "amount");
+    const trace = storableTrace();
+    const out = await this.store.transaction(async (r) => {
+      const before = await r.budgets.get(req.budgetId);
+      const committed = await r.budgets.commit(req.budgetId, amount, req.basis);
+      if (!committed)
+        throw new ValidationError(`budgetId: unknown or closed ${req.budgetId}`);
+      await r.ledger.append({
+        type: "budget.usage",
+        aggregate: "budget",
+        aggregateId: String(committed.id),
+        actor: this.ledgerActor(principal, "human"),
+        payload: { budgetId: committed.id, amount, basis: req.basis },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return { committed, before };
+    }).then(({ committed, before }) => {
+      this.obs.metrics.llmCost({ amount, basis: req.basis });
+      if (before && before.status !== "exhausted" && committed.status === "exhausted") {
+        this.obs.metrics.budgetExhausted({ dim: committed.dim });
+        this.obs.metrics.budgetOverrun({ dim: committed.dim });
+      }
+      return committed;
+    });
     return out;
   }
 
@@ -898,12 +1112,24 @@ export class SwarmService {
     this.requireOperator(principal);
     if (!Number.isInteger(req.budgetId) || req.budgetId <= 0)
       throw new ValidationError("budgetId: positive integer required");
-    const out = await this.store.budgets.close(req.budgetId);
-    if (!out)
-      throw new ValidationError(
-        `budgetId: unknown or already closed ${req.budgetId}`,
-      );
-    return out;
+    const trace = storableTrace();
+    return this.store.transaction(async (r) => {
+      const out = await r.budgets.close(req.budgetId);
+      if (!out)
+        throw new ValidationError(
+          `budgetId: unknown or already closed ${req.budgetId}`,
+        );
+      await r.ledger.append({
+        type: "budget.closed",
+        aggregate: "budget",
+        aggregateId: String(out.id),
+        actor: this.ledgerActor(principal, "human"),
+        payload: { budgetId: out.id },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return out;
+    });
   }
   /**
    * Records the session, acks what it consumed, and settles the work items behind those messages. A failed
@@ -990,6 +1216,16 @@ export class SwarmService {
                 itemIds,
                 req.outcome === "done" ? "done" : "blocked",
               );
+            const trace = storableTrace();
+            await r.ledger.append({
+              type: "report.submitted",
+              aggregate: "report",
+              aggregateId: String(report.id),
+              actor: this.ledgerActor(principal, agent),
+              payload: { agent, workItemId: itemIds[0] ?? null, outcome: req.outcome },
+              traceparent: trace.traceparent,
+              tracestate: trace.tracestate,
+            });
             return { report, acked, itemIds };
           },
         );
@@ -1023,6 +1259,8 @@ export class SwarmService {
               Date.parse(m.ackedAt ?? m.createdAt) - Date.parse(m.createdAt),
           ),
         });
+        if (req.outcome === "failed")
+          this.obs.metrics.taskFailed({ reason: "failed" });
         return report;
       },
     );

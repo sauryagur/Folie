@@ -88,6 +88,12 @@ describe("parseCommand", () => {
     },
   );
 
+  it("cancel targets an agent with an optional reason", () => {
+    expect(parse("cancel bob stop that")).toEqual({ kind: "cancel", agent: "bob", reason: "stop that" });
+    expect(parse("cancel")).toEqual({ kind: "cancel", agent: "agent-1", reason: "cancelled from TUI" });
+    expect(parse("cancel", null)).toMatchObject({ kind: "error" });
+  });
+
   it("view takes only known views", () => {
     expect(parse("view reports")).toEqual({ kind: "view", view: "reports" });
     expect(parse("view nonsense")).toMatchObject({ kind: "error" });
@@ -165,6 +171,10 @@ describe("execute", () => {
         calls.push(`${op} ${agent}`),
         { agent, state: op === "delete" ? "retired" : "running" }
       ),
+      queueCancel: async (agent, reason) => (
+        calls.push(`cancel ${agent} ${reason}`),
+        { cursor: 7 }
+      ),
     };
     return { api, calls };
   }
@@ -211,5 +221,13 @@ describe("execute", () => {
     await expect(
       execute({ kind: "op", op: "suspend", agent: "ghost" }, api),
     ).rejects.toThrow("404 ghost has no task");
+  });
+
+  it("cancel calls queueCancel", async () => {
+    const { api, calls } = fakeApi();
+    expect(await execute({ kind: "cancel", agent: "a", reason: "why" }, api)).toBe(
+      "cancel queued for a (cursor 7)",
+    );
+    expect(calls).toEqual(["cancel a why"]);
   });
 });

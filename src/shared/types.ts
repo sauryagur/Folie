@@ -320,3 +320,26 @@ export interface AgentOpResult {
   /** The agent's state after the operation. */
   state: string;
 }
+
+/** One append-only ledger row: a state transition and its provenance. */
+export interface LedgerEvent {
+  id: number;
+  type: string;
+  aggregate: string;
+  aggregateId: string;
+  actor: string;
+  payload: Record<string, unknown>;
+  correlationId: string | null;
+  causationId: string | null;
+  traceparent: string | null;
+  tracestate: string | null;
+  createdAt: string;
+}
+
+export interface LedgerQuery {
+  after?: number;
+  types?: string[];
+  goal?: number;
+  agent?: string;
+  limit?: number;
+}

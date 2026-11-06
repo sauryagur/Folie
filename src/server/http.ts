@@ -7,7 +7,7 @@ import {
 } from "node:http";
 import { SpanKind } from "@opentelemetry/api";
 import { contextFrom, headersOf, withSpan } from "../shared/trace";
-import type { AgentOp, EventQuery, InboxQuery } from "../shared/types";
+import type { AgentOp, EventQuery, InboxQuery, LedgerEvent, LedgerQuery } from "../shared/types";
 import {
   ForbiddenError,
   NotFoundError,
@@ -247,6 +247,24 @@ function routes(
         );
       },
     ],
+    [
+      "GET",
+      /^\/v1\/stream$/,
+      (_, req, p) => {
+        const q = queryParams(req);
+        const lastId = req.headers["last-event-id"];
+        const after = lastId !== undefined ? Number(lastId) : intParam(q, "after");
+        return svc.stream(
+          {
+            after: Number.isFinite(after) ? after : undefined,
+            types: q.getAll("types").flatMap((s) => s.split(",")),
+            goal: intParam(q, "goal"),
+            agent: q.get("agent") ?? undefined,
+          },
+          p,
+        );
+      },
+    ],
   ];
 }
 
@@ -370,6 +388,57 @@ export function httpServer(
         },
         () => route[2](path.match(route[1])!, req, principal),
       );
+      // SSE: /v1/stream with a non-JSON Accept streams frames; JSON mode is the plain array above (tests).
+      if (
+        path === "/v1/stream" &&
+        req.method === "GET" &&
+        !(req.headers.accept ?? "").includes("application/json")
+      ) {
+        const events = result as LedgerEvent[];
+        res.writeHead(200, {
+          "content-type": "text/event-stream",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+          "x-accel-buffering": "no",
+        });
+        let lastSent = 0;
+        for (const e of events) {
+          res.write(`id: ${e.id}\nevent: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
+          lastSent = e.id;
+        }
+        if (lastSent === 0) {
+          const h = req.headers["last-event-id"];
+          lastSent = h !== undefined ? Number(h) : (intParam(queryParams(req), "after") ?? 0);
+          // No deletion/retention yet: resync would only fire if after < 1 were undeliverable.
+        }
+        let closed = false;
+        const poll = setInterval(async () => {
+          try {
+            const next = await svc.stream(
+              {
+                after: lastSent,
+                types: queryParams(req).getAll("types").flatMap((s) => s.split(",")),
+                goal: intParam(queryParams(req), "goal"),
+                agent: queryParams(req).get("agent") ?? undefined,
+              },
+              principal,
+            );
+            for (const e of next) {
+              res.write(`id: ${e.id}\nevent: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
+              lastSent = e.id;
+            }
+          } catch {}
+        }, 1000);
+        const keepalive = setInterval(() => {
+          if (!closed) res.write(": keepalive\n\n");
+        }, 15000);
+        req.on("close", () => {
+          closed = true;
+          clearInterval(poll);
+          clearInterval(keepalive);
+        });
+        return;
+      }
       reply(req, res, 200, result);
     } catch (e) {
       if (e instanceof ValidationError)
