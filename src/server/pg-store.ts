@@ -786,6 +786,20 @@ const tasks = (q: Queryable): TaskRepo => ({
     );
     return toTask(rows[0]);
   },
+  async setVerified(taskId) {
+    const { rows } = await q.query(
+      `UPDATE tasks SET status='verified' WHERE id=$1 AND status='submitted' RETURNING ${TASK_COLS}`,
+      [taskId],
+    );
+    return rows[0] ? toTask(rows[0]) : null;
+  },
+  async listForWorkItem(workItemId) {
+    const { rows } = await q.query(
+      `SELECT ${TASK_COLS} FROM tasks WHERE work_item_id=$1 ORDER BY id`,
+      [workItemId],
+    );
+    return rows.map(toTask);
+  },
 });
 const BUDGET_COLS =
   "id, name, dim, limit_amount, reserved, spent, status, parent_id";

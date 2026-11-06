@@ -106,6 +106,9 @@ export interface TaskRepo {
     fence: number,
     result: Record<string, unknown>,
   ): Promise<TaskRecord | null>;
+  /** Conditional move submitted -> verified; null when not submitted. */
+  setVerified(taskId: number): Promise<TaskRecord | null>;
+  listForWorkItem(workItemId: number): Promise<TaskRecord[]>;
 }
 
 export interface ExecutionRegistryRepo {

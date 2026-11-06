@@ -44,7 +44,7 @@ const setupTask = async () => {
 };
 
 describe("verification contracts", () => {
-  it("rejects self-verification and never marks completed without independent verdicts", async () => {
+  it("moves submitted->verified on independent pass and evaluates achieved", async () => {
     const { workItem, task } = await setupTask();
     const v = await service.requestVerification(
       { taskId: task.id, check: "result-present", verifier: "b" },
@@ -66,7 +66,7 @@ describe("verification contracts", () => {
       ),
     ).rejects.toBeInstanceOf(ValidationError);
 
-    // Independent pass completes, then the task may move submitted->completed.
+    // Independent pass moves submitted->verified.
     await service.recordVerdict(
       {
         verificationId: v.id,
@@ -80,11 +80,11 @@ describe("verification contracts", () => {
     const t = (
       await db.query("SELECT status FROM tasks WHERE id = $1", [task.id])
     ).rows[0];
-    expect(t).toMatchObject({ status: "submitted" });
+    expect(t).toMatchObject({ status: "verified" });
 
-    // Goal evaluation is a separate gate: no verified task, no achieved.
+    // All tasks verified: goal is achieved.
     const ev = await service.evaluateGoal({ workItemId: workItem.id }, op);
-    expect(ev.verdict).toBe("not_achieved");
+    expect(ev.verdict).toBe("achieved");
   });
 
   it("rejects verdicts from unknown verifiers and can't force pass without evidence", async () => {
@@ -105,5 +105,135 @@ describe("verification contracts", () => {
         op,
       ),
     ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it("stays submitted on fail verdict", async () => {
+    const { workItem, task } = await setupTask();
+    const v = await service.requestVerification(
+      { taskId: task.id, check: "x", verifier: "b" },
+      op,
+    );
+    await service.recordVerdict(
+      {
+        verificationId: v.id,
+        verifier: "b",
+        verdict: "fail",
+        confidence: 0.9,
+        evidence: ["bad"],
+      },
+      op,
+    );
+    const t = (
+      await db.query("SELECT status FROM tasks WHERE id = $1", [task.id])
+    ).rows[0];
+    expect(t).toMatchObject({ status: "submitted" });
+    const ev = await service.evaluateGoal({ workItemId: workItem.id }, op);
+    expect(ev.verdict).toBe("not_achieved");
+  });
+
+  it("stays submitted without a required contract", async () => {
+    const { workItem, task } = await setupTask();
+    const v = await service.requestVerification(
+      { taskId: task.id, check: "x", verifier: "b", required: false },
+      op,
+    );
+    await service.recordVerdict(
+      {
+        verificationId: v.id,
+        verifier: "b",
+        verdict: "pass",
+        confidence: 0.9,
+        evidence: [],
+      },
+      op,
+    );
+    const t = (
+      await db.query("SELECT status FROM tasks WHERE id = $1", [task.id])
+    ).rows[0];
+    expect(t).toMatchObject({ status: "submitted" });
+    const ev = await service.evaluateGoal({ workItemId: workItem.id }, op);
+    expect(ev.verdict).toBe("not_achieved");
+  });
+
+  it("requires every required check to pass before verified", async () => {
+    const { task } = await setupTask();
+    const v1 = await service.requestVerification(
+      { taskId: task.id, check: "c1", verifier: "b" },
+      op,
+    );
+    const v2 = await service.requestVerification(
+      { taskId: task.id, check: "c2", verifier: "b" },
+      op,
+    );
+    await service.recordVerdict(
+      {
+        verificationId: v1.id,
+        verifier: "b",
+        verdict: "pass",
+        confidence: 0.9,
+        evidence: [],
+      },
+      op,
+    );
+    const t1 = (
+      await db.query("SELECT status FROM tasks WHERE id = $1", [task.id])
+    ).rows[0];
+    expect(t1).toMatchObject({ status: "submitted" });
+    await service.recordVerdict(
+      {
+        verificationId: v2.id,
+        verifier: "b",
+        verdict: "pass",
+        confidence: 0.9,
+        evidence: [],
+      },
+      op,
+    );
+    const t2 = (
+      await db.query("SELECT status FROM tasks WHERE id = $1", [task.id])
+    ).rows[0];
+    expect(t2).toMatchObject({ status: "verified" });
+  });
+
+  it("evaluates partially with one of two verified", async () => {
+    const { workItem, task } = await setupTask();
+    const t2 = await service.proposeTask(
+      { agent: "a", workItemId: workItem.id, title: "sub2", spec: {} },
+      asAgent("a"),
+    );
+    const c2 = await service.claimTask({ agent: "a", taskId: t2.id }, asAgent("a"));
+    await service.startTask(
+      { agent: "a", taskId: t2.id, fence: c2.fence },
+      asAgent("a"),
+    );
+    await service.submitTask(
+      { agent: "a", taskId: t2.id, fence: c2.fence, result: { ok: true } },
+      asAgent("a"),
+    );
+    const v = await service.requestVerification(
+      { taskId: task.id, check: "x", verifier: "b" },
+      op,
+    );
+    await service.recordVerdict(
+      {
+        verificationId: v.id,
+        verifier: "b",
+        verdict: "pass",
+        confidence: 0.9,
+        evidence: [],
+      },
+      op,
+    );
+    const ev = await service.evaluateGoal({ workItemId: workItem.id }, op);
+    expect(ev.verdict).toBe("partially");
+    expect(ev.caveats.join(" ")).toMatch(/1\/2 tasks verified/);
+  });
+
+  it("evaluates not_achieved with no tasks yet", async () => {
+    await service.registerAgent("a");
+    const { workItem } = await service.submitGoal({ goal: "g2", to: "a" }, op);
+    const ev = await service.evaluateGoal({ workItemId: workItem.id }, op);
+    expect(ev.verdict).toBe("not_achieved");
+    expect(ev.caveats.join(" ")).toMatch(/no tasks yet/);
   });
 });

@@ -104,13 +104,12 @@ describe("semantic metrics catalog", () => {
 
     const m = await mem.metrics();
     expect(m["folie.verification.result{result=pass,verification.kind=contract}"]).toBe(1);
-    expect(ev.verdict).toBe("not_achieved");
-    expect(m["folie.goal.outcome{outcome=not_achieved}"]).toBe(1);
+    expect(ev.verdict).toBe("achieved");
+    expect(m["folie.goal.outcome{outcome=achieved}"]).toBe(1);
+    expect(m["folie.task.verified{}"]).toBe(1);
     expect(m["folie.budget.exhausted{dim=usd}"]).toBe(1);
     expect(m["folie.budget.overrun{dim=usd}"]).toBe(1);
     expect(m["folie.llm.cost{cost_basis=estimated}"]).toBe(25);
-    // No fabricated verified transition: the aggregate never moves task state.
-    expect(m["folie.task.transition{from=submitted,to=verified}"]).toBeUndefined();
     expect(m["folie.task.transition{from=submitted,to=completed}"]).toBeUndefined();
     for (const k of Object.keys(m)) {
       expect(k).not.toContain("task_id");

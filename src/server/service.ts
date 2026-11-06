@@ -868,7 +868,7 @@ export class SwarmService {
         "independence: verifier cannot be the producer",
       );
     const trace = storableTrace();
-    const out = await this.store.transaction(async (r) => {
+    const { decided, verified } = await this.store.transaction(async (r) => {
       const decided = await r.verifications.recordVerdict({
         verificationId: req.verificationId,
         verdict: req.verdict,
@@ -885,10 +885,30 @@ export class SwarmService {
         traceparent: trace.traceparent,
         tracestate: trace.tracestate,
       });
-      return decided;
+      let verified: TaskRecord | null = null;
+      const all = await r.verifications.listForTask(v.taskId);
+      const required = all.filter((x) => x.required);
+      const failures = required.filter((x) => x.verdict === "fail").length;
+      const passes = required.filter((x) => x.verdict === "pass").length;
+      if (required.length > 0 && failures === 0 && passes === required.length) {
+        verified = await r.tasks.setVerified(v.taskId);
+        if (verified) {
+          await r.ledger.append({
+            type: "task.verified",
+            aggregate: "task",
+            aggregateId: String(verified.id),
+            actor: this.ledgerActor(principal, "system"),
+            payload: { taskId: verified.id, workItemId: verified.workItemId },
+            traceparent: trace.traceparent,
+            tracestate: trace.tracestate,
+          });
+        }
+      }
+      return { decided, verified };
     });
     this.obs.metrics.verificationResult({ kind: "contract", result: req.verdict });
-    return out;
+    if (verified) this.obs.metrics.taskVerified();
+    return decided;
   }
 
   async evaluateGoal(
@@ -900,14 +920,24 @@ export class SwarmService {
       throw new ValidationError("workItemId: positive integer required");
     const wi = await this.store.workItems.get(req.workItemId);
     if (!wi) throw new ValidationError(`workItemId: unknown ${req.workItemId}`);
-    // Coverage: at least one verified task is required for achieved; in this slice `completed` counts,
-    // because the deterministic adapter that produces `verified` arrives with the gateway slice.
-    const taskRows = (await this.store.transaction(async (r) => {
-      return { rows: [] as unknown[] };
-    })) as unknown;
-    void taskRows;
-    const verdict = "not_achieved" as const;
-    const caveats = ["no verified task yet"];
+    // Real coverage: achieved iff every task of the work item is verified.
+    const tasks = await this.store.tasks.listForWorkItem(req.workItemId);
+    const total = tasks.length;
+    const verifiedCount = tasks.filter((t) => t.status === "verified").length;
+    const verdict =
+      verifiedCount > 0 && verifiedCount === total
+        ? ("achieved" as const)
+        : verifiedCount > 0
+          ? ("partially" as const)
+          : ("not_achieved" as const);
+    const caveats =
+      total === 0
+        ? ["no tasks yet"]
+        : verifiedCount === 0
+          ? ["no verified task yet"]
+          : verifiedCount < total
+            ? [`${verifiedCount}/${total} tasks verified`]
+            : [];
     const trace = storableTrace();
     const evaluated = await this.store.transaction(async (r) => {
       const recorded = await r.goalEvaluations.record({

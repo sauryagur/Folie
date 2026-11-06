@@ -57,6 +57,8 @@ export interface Metrics {
   goalEvaluated(e: { outcome: string }): void;
   /** LLM cost whose basis is known (recordUsage); reuses folie.llm.cost. */
   llmCost(e: { amount: number; basis: string }): void;
+  /** One submitted task that moved to verified after all required checks passed. */
+  taskVerified(): void;
 }
 
 export interface Observability {
@@ -78,6 +80,7 @@ export const noopMetrics: Metrics = {
   proposalRecorded() {},
   goalEvaluated() {},
   llmCost() {},
+  taskVerified() {},
 };
 export const noopObservability = (): Observability => ({
   tracer: trace.getTracer(TRACER_NAME),
@@ -163,6 +166,9 @@ export function createTelemetry(opts: TelemetryOptions): Telemetry {
   const taskFailed = meter.createCounter("folie.task.failed", {
     description: "Tasks parked by a failed session",
   });
+  const taskVerified = meter.createCounter("folie.task.verified", {
+    description: "Tasks that moved submitted -> verified",
+  });
   const deliveryLatency = meter.createHistogram("folie.message.delivery.latency", {
     description: "Time from message creation to lease",
     unit: "ms",
@@ -243,6 +249,9 @@ export function createTelemetry(opts: TelemetryOptions): Telemetry {
     },
     llmCost({ amount, basis }) {
       cost.add(amount, { cost_basis: basis });
+    },
+    taskVerified() {
+      taskVerified.add(1);
     },
   };
 
