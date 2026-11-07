@@ -686,6 +686,12 @@ export class SwarmService {
     this.assertAgentMatches(principal, agent);
     if (!Number.isInteger(req.taskId) || req.taskId <= 0)
       throw new ValidationError("taskId: positive integer required");
+    const existing = await this.store.tasks.get(req.taskId);
+    if (existing) {
+      const wi = await this.store.workItems.get(existing.workItemId);
+      if (wi?.paused)
+        throw new ValidationError("workItemId: paused — claims blocked");
+    }
     const trace = storableTrace();
     const out = await this.store.transaction(async (r) => {
       const claimed = await r.tasks.claim(req.taskId, agent, 30_000);
@@ -789,6 +795,81 @@ export class SwarmService {
     this.obs.metrics.taskTransition({ from: "running", to: "submitted" });
     return submitted;
   }
+  /** Reclaim tasks whose lease expired (R-8.4): fence+attempt bump, stale submits rejected. */
+  async sweepLeases(limit = 100, principal: Principal): Promise<{ reclaimed: number }> {
+    this.requireOperator(principal);
+    if (!Number.isInteger(limit) || limit < 1)
+      throw new ValidationError("limit: positive integer required");
+    const trace = storableTrace();
+    const reclaimed = await this.store.transaction(async (r) => {
+      const tasks = await r.tasks.sweepExpired(limit);
+      for (const t of tasks) {
+        await r.ledger.append({
+          type: "task.reclaimed",
+          aggregate: "task",
+          aggregateId: String(t.id),
+          actor: this.ledgerActor(principal, "system"),
+          payload: { taskId: t.id, workItemId: t.workItemId, fence: t.fence },
+          traceparent: trace.traceparent,
+          tracestate: trace.tracestate,
+        });
+      }
+      return tasks;
+    });
+    for (const t of reclaimed)
+      this.obs.metrics.taskTransition({ from: "claimed", to: "available" });
+    return { reclaimed: reclaimed.length };
+  }
+
+  /** Revoke a live claim (R-8.3): fence bump, stale submits rejected. */
+  async revokeClaim(taskId: number, principal: Principal): Promise<TaskRecord> {
+    this.requireOperator(principal);
+    if (!Number.isInteger(taskId) || taskId <= 0)
+      throw new ValidationError("taskId: positive integer required");
+    const prev = await this.store.tasks.get(taskId);
+    const trace = storableTrace();
+    const out = await this.store.transaction(async (r) => {
+      const revoked = await r.tasks.revoke(taskId);
+      if (!revoked)
+        throw new ValidationError(`taskId: not claimed ${taskId}`);
+      await r.ledger.append({
+        type: "task.revoked",
+        aggregate: "task",
+        aggregateId: String(revoked.id),
+        actor: this.ledgerActor(principal, "human"),
+        payload: { taskId: revoked.id, workItemId: revoked.workItemId, fence: revoked.fence },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return revoked;
+    });
+    this.obs.metrics.taskTransition({ from: prev?.status ?? "claimed", to: "available" });
+    return out;
+  }
+
+  /** Pause/resume a goal (R-7.3): pauses block new claims immediately. */
+  async setGoalPaused(workItemId: number, paused: boolean, principal: Principal): Promise<WorkItem> {
+    this.requireOperator(principal);
+    if (!Number.isInteger(workItemId) || workItemId <= 0)
+      throw new ValidationError("workItemId: positive integer required");
+    const trace = storableTrace();
+    const out = await this.store.transaction(async (r) => {
+      const updated = await r.workItems.setPaused(workItemId, paused);
+      if (!updated) throw new NotFoundError(`work item ${workItemId}`);
+      await r.ledger.append({
+        type: paused ? "goal.paused" : "goal.resumed",
+        aggregate: "goal",
+        aggregateId: String(workItemId),
+        actor: this.ledgerActor(principal, "human"),
+        payload: { workItemId, paused },
+        traceparent: trace.traceparent,
+        tracestate: trace.tracestate,
+      });
+      return updated;
+    });
+    return out;
+  }
+
   /**
    * Verification contracts (R-11 slice, contracts only): the verifier must be independent of the producer,
    * and `achieved` is set only by goal evaluation. Deterministic adapter execution and LLM reviewers are

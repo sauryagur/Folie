@@ -77,12 +77,13 @@ const toMessage = (r: Row): Message => ({
   tracestate: (r.tracestate as string | null) ?? null,
 });
 
-const WORK_ITEM_COLS = "id, goal, state, created_at, traceparent, tracestate";
+const WORK_ITEM_COLS = "id, goal, state, paused, created_at, traceparent, tracestate";
 
 const toWorkItem = (r: Row): WorkItem => ({
   id: r.id as number,
   goal: r.goal as string,
   state: r.state as WorkItemState,
+  paused: r.paused as boolean,
   createdAt: iso(r.created_at),
   traceparent: (r.traceparent as string | null) ?? null,
   tracestate: (r.tracestate as string | null) ?? null,
@@ -243,6 +244,13 @@ const workItems = (q: Queryable): WorkItemRepo => ({
       "UPDATE work_items SET state = $2 WHERE id = ANY($1::int[])",
       [ids, state],
     );
+  },
+  async setPaused(id, paused) {
+    const { rows } = await q.query(
+      `UPDATE work_items SET paused = $2 WHERE id = $1 RETURNING ${WORK_ITEM_COLS}`,
+      [id, paused],
+    );
+    return rows[0] ? toWorkItem(rows[0]) : null;
   },
   async latestReport(id) {
     const { rows } = await q.query(
@@ -796,6 +804,38 @@ const tasks = (q: Queryable): TaskRepo => ({
       [taskId],
     );
     return rows[0] ? toTask(rows[0]) : null;
+  },
+  async sweepExpired(limit) {
+    const { rows } = await q.query(
+      `SELECT id FROM tasks WHERE status IN ('claimed','running') AND lease_expires_at IS NOT NULL AND lease_expires_at < now() AND attempt < 3 ORDER BY lease_expires_at LIMIT $1`,
+      [limit],
+    );
+    const reclaimed = [];
+    for (const row of rows as { id: number }[]) {
+      const { rows: updated } = await q.query(
+        `UPDATE tasks SET status='available', owner=NULL, fence=fence+1, attempt=attempt+1, lease_expires_at=NULL WHERE id=$1 RETURNING ${TASK_COLS}`,
+        [row.id],
+      );
+      if (!updated[0]) continue;
+      await q.query(
+        `UPDATE task_claims SET state='expired', ended_at=now() WHERE task_id=$1 AND state='active'`,
+        [row.id],
+      );
+      reclaimed.push(toTask(updated[0]));
+    }
+    return reclaimed;
+  },
+  async revoke(taskId) {
+    const { rows } = await q.query(
+      `UPDATE tasks SET status='available', owner=NULL, fence=fence+1, attempt=attempt+1, lease_expires_at=NULL WHERE id=$1 AND status IN ('claimed','running') RETURNING ${TASK_COLS}`,
+      [taskId],
+    );
+    if (!rows[0]) return null;
+    await q.query(
+      `UPDATE task_claims SET state='revoked', ended_at=now() WHERE task_id=$1 AND state='active'`,
+      [taskId],
+    );
+    return toTask(rows[0]);
   },
   async listForWorkItem(workItemId) {
     const { rows } = await q.query(

@@ -128,6 +128,7 @@ describe("execute", () => {
             id: 9,
             goal: r.goal,
             state: r.to ? "assigned" : "queued",
+            paused: false,
             createdAt: "",
           },
           message: r.to

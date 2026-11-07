@@ -108,6 +108,10 @@ export interface TaskRepo {
   ): Promise<TaskRecord | null>;
   /** Conditional move submitted -> verified; null when not submitted. */
   setVerified(taskId: number): Promise<TaskRecord | null>;
+  /** Reclaim claimed/running tasks whose lease expired (attempt < 3), bumping fence+attempt. */
+  sweepExpired(limit: number): Promise<TaskRecord[]>;
+  /** Revoke a claimed/running claim back to available with a fence bump. */
+  revoke(taskId: number): Promise<TaskRecord | null>;
   listForWorkItem(workItemId: number): Promise<TaskRecord[]>;
 }
 
@@ -217,6 +221,7 @@ export interface WorkItemRepo {
   ): Promise<WorkItem>;
   get(id: number): Promise<WorkItem | null>;
   setState(ids: number[], state: WorkItemState): Promise<void>;
+  setPaused(id: number, paused: boolean): Promise<WorkItem | null>;
   /** Oldest work item still waiting for an agent. */
   oldestQueued(): Promise<WorkItem | null>;
   /** Newest report from a session that consumed any message of this work item. */

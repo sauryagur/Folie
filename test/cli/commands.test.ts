@@ -18,7 +18,7 @@ import type {
 } from "../../src/shared/types";
 
 const view = (state: WorkItemState, withReport = false): WorkItemView => ({
-  workItem: { id: 5, goal: "g", state, createdAt: "" },
+  workItem: { id: 5, goal: "g", state, paused: false, createdAt: "" },
   report: withReport
     ? {
         id: 1,

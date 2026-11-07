@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS work_items (
   goal       text NOT NULL,
   state      text NOT NULL DEFAULT 'queued'
              CHECK (state IN ('queued','assigned','blocked','done','failed')),
+  paused     boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS messages (
@@ -56,6 +57,7 @@ ALTER TABLE messages   ADD COLUMN IF NOT EXISTS tracestate  text;
 CREATE UNIQUE INDEX IF NOT EXISTS messages_request ON messages (sender, request_id, recipient) WHERE request_id IS NOT NULL;
 ALTER TABLE work_items ADD COLUMN IF NOT EXISTS traceparent text;
 ALTER TABLE work_items ADD COLUMN IF NOT EXISTS tracestate  text;
+ALTER TABLE work_items ADD COLUMN IF NOT EXISTS paused boolean NOT NULL DEFAULT false;
 ALTER TABLE reports    ADD COLUMN IF NOT EXISTS prompt_tokens     int;
 ALTER TABLE reports    ADD COLUMN IF NOT EXISTS completion_tokens int;
 ALTER TABLE reports    ADD COLUMN IF NOT EXISTS cost_usd          double precision;

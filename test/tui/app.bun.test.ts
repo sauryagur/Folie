@@ -53,7 +53,7 @@ describe.skipIf(!process.versions.bun)("TUI app", () => {
     submitGoal: async (r) => (
       calls.push(`submit ${r.to ?? "-"} ${r.goal}`),
       {
-        workItem: { id: 9, goal: r.goal, state: "queued", createdAt: "" },
+        workItem: { id: 9, goal: r.goal, state: "queued", paused: false, createdAt: "" },
         message: null,
       }
     ),

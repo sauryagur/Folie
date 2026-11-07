@@ -23,6 +23,7 @@ export interface WorkItem {
   id: number;
   goal: string;
   state: WorkItemState;
+  paused: boolean;
   createdAt: string;
   /** W3C trace context of the work item's root span: everything done for it joins this trace. */
   traceparent?: string | null;
