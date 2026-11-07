@@ -7,7 +7,13 @@ import {
 } from "node:http";
 import { SpanKind } from "@opentelemetry/api";
 import { contextFrom, headersOf, withSpan } from "../shared/trace";
-import type { AgentOp, EventQuery, InboxQuery, LedgerEvent, LedgerQuery } from "../shared/types";
+import type {
+  AgentOp,
+  EventQuery,
+  InboxQuery,
+  LedgerEvent,
+  LedgerQuery,
+} from "../shared/types";
 import {
   ForbiddenError,
   NotFoundError,
@@ -46,6 +52,19 @@ async function rawBody(req: IncomingMessage, max: number): Promise<Buffer> {
 
 async function jsonBody<T>(req: IncomingMessage): Promise<T> {
   const raw = await rawBody(req, MAX_BODY);
+  let v: unknown;
+  try {
+    v = JSON.parse(raw.toString() || "null");
+  } catch {
+    throw new ValidationError("body is not valid JSON");
+  }
+  if (typeof v !== "object" || v === null || Array.isArray(v))
+    throw new ValidationError("body must be a JSON object");
+  return v as T;
+}
+
+async function jsonBodyLarge<T>(req: IncomingMessage): Promise<T> {
+  const raw = await rawBody(req, MAX_OTLP_BODY);
   let v: unknown;
   try {
     v = JSON.parse(raw.toString() || "null");
@@ -209,7 +228,7 @@ function routes(
     [
       "POST",
       /^\/v1\/sessions\/events$/,
-      async (_, req, p) => svc.ingestEvents(await jsonBody(req), p),
+      async (_, req, p) => svc.ingestEvents(await jsonBodyLarge(req), p),
     ],
     [
       "POST",
@@ -253,7 +272,8 @@ function routes(
       (_, req, p) => {
         const q = queryParams(req);
         const lastId = req.headers["last-event-id"];
-        const after = lastId !== undefined ? Number(lastId) : intParam(q, "after");
+        const after =
+          lastId !== undefined ? Number(lastId) : intParam(q, "after");
         return svc.stream(
           {
             after: Number.isFinite(after) ? after : undefined,
@@ -263,6 +283,175 @@ function routes(
           },
           p,
         );
+      },
+    ],
+    [
+      "POST",
+      /^\/v1\/tasks$/,
+      async (_, req, p) => svc.proposeTask(await jsonBody(req), p),
+    ],
+    [
+      "POST",
+      /^\/v1\/tasks\/(\d+)\/claim$/,
+      async (m, req, p) => {
+        const body = (await jsonBody(req).catch(() => ({}))) as {
+          agent?: string;
+        } satisfies { agent?: string };
+        return svc.claimTask(
+          { agent: body?.agent ?? "", taskId: Number(m[1]) },
+          p,
+        );
+      },
+    ],
+    [
+      "POST",
+      /^\/v1\/tasks\/(\d+)\/start$/,
+      async (m, req, p) => {
+        const body = (await jsonBody(req).catch(() => ({}))) as {
+          agent?: string;
+          fence?: number;
+        } satisfies { agent?: string; fence?: number };
+        return svc.startTask(
+          {
+            agent: body?.agent ?? "",
+            taskId: Number(m[1]),
+            fence: Number(body?.fence),
+          },
+          p,
+        );
+      },
+    ],
+    [
+      "POST",
+      /^\/v1\/tasks\/(\d+)\/submit$/,
+      async (m, req, p) => {
+        const body = (await jsonBody(req).catch(() => ({}))) as {
+          agent?: string;
+          fence?: number;
+          result?: Record<string, unknown>;
+        } satisfies {
+          agent?: string;
+          fence?: number;
+          result?: Record<string, unknown>;
+        };
+        return svc.submitTask(
+          {
+            agent: body?.agent ?? "",
+            taskId: Number(m[1]),
+            fence: Number(body?.fence),
+            result: body?.result ?? {},
+          },
+          p,
+        );
+      },
+    ],
+    [
+      "POST",
+      /^\/v1\/tasks\/(\d+)\/revoke$/,
+      (_m, _req, p) => svc.revokeClaim(Number(_m[1]), p),
+    ],
+    [
+      "POST",
+      /^\/v1\/work-items\/(\d+)\/pause$/,
+      async (m, req, p) => {
+        const body = (await jsonBody(req).catch(() => ({}))) as {
+          paused?: unknown;
+        } satisfies { paused?: unknown };
+        return svc.setGoalPaused(Number(m[1]), body?.paused === true, p);
+      },
+    ],
+    ["GET", /^\/v1\/budgets$/, (_m, _req, p) => svc.listBudgets(p)],
+    [
+      "POST",
+      /^\/v1\/budgets$/,
+      async (_, req, p) => svc.createBudget(await jsonBody(req), p),
+    ],
+    [
+      "POST",
+      /^\/v1\/budgets\/(\d+)\/carve-out$/,
+      async (m, req, p) => {
+        const body = (await jsonBody(req).catch(() => ({}))) as {
+          name?: string;
+          limitAmount?: number;
+        } satisfies { name?: string; limitAmount?: number };
+        return svc.carveOut(
+          {
+            parentId: Number(m[1]),
+            name: body?.name ?? "",
+            limitAmount: Number(body?.limitAmount),
+          },
+          p,
+        );
+      },
+    ],
+    [
+      "POST",
+      /^\/v1\/budgets\/(\d+)\/usage$/,
+      async (m, req, p) => {
+        const body = (await jsonBody(req).catch(() => ({}))) as {
+          amount?: number;
+          basis?: "estimated" | "measured" | "external_charge";
+        } satisfies {
+          amount?: number;
+          basis?: "estimated" | "measured" | "external_charge";
+        };
+        return svc.recordUsage(
+          {
+            budgetId: Number(m[1]),
+            amount: Number(body?.amount),
+            basis: String(body?.basis ?? "") as
+              "estimated" | "measured" | "external_charge",
+          },
+          p,
+        );
+      },
+    ],
+    [
+      "POST",
+      /^\/v1\/budgets\/(\d+)\/close$/,
+      (_m, _req, p) => svc.closeBudget({ budgetId: Number(_m[1]) }, p),
+    ],
+    [
+      "POST",
+      /^\/v1\/verifications$/,
+      async (_, req, p) => svc.requestVerification(await jsonBody(req), p),
+    ],
+    [
+      "POST",
+      /^\/v1\/verifications\/(\d+)\/verdict$/,
+      async (m, req, p) => {
+        const body = (await jsonBody(req).catch(() => ({}))) as {
+          verifier?: string;
+          verdict?: "pass" | "fail" | "inconclusive";
+          confidence?: number;
+          evidence?: string[];
+        } satisfies {
+          verifier?: string;
+          verdict?: "pass" | "fail" | "inconclusive";
+          confidence?: number;
+          evidence?: string[];
+        };
+        return svc.recordVerdict(
+          {
+            verificationId: Number(m[1]),
+            verifier: body?.verifier ?? "",
+            verdict: String(body?.verdict ?? "") as
+              "pass" | "fail" | "inconclusive",
+            confidence: Number(body?.confidence),
+            evidence: body?.evidence ?? [],
+          },
+          p,
+        );
+      },
+    ],
+    [
+      "POST",
+      /^\/v1\/admin\/sweep-leases$/,
+      async (_, req, p) => {
+        const body = (await jsonBody(req).catch(() => ({}))) as {
+          limit?: number;
+        } satisfies { limit?: number };
+        return svc.sweepLeases(body?.limit ?? 100, p);
       },
     ],
   ];
@@ -282,7 +471,7 @@ function reply(
   res.writeHead(status, headers).end(JSON.stringify(body));
 }
 
-/** Resolve Authorization: Bearer … into a Principal, fail-closed. Reads from the store (hash only). */
+/** Resolve Authorization: Bearer … into a Principal, fail-closed. Single joined lookup (hash only). */
 async function resolvePrincipal(
   req: IncomingMessage,
   store: Store,
@@ -294,27 +483,20 @@ async function resolvePrincipal(
   const row = await store.auth.findByHash(hash);
   if (!row || row.revokedAt) throw new UnauthorizedError("unknown token");
   if (row.kind === "operator") {
-    // Constant-time comparison against the configured operator secret (and the DB hash).
     if (!constantTimeEqual(token, operatorToken))
       throw new UnauthorizedError("unknown token");
     return { kind: "operator", name: "operator" };
   }
-  // Agent token.
   if (!row.agentName || !row.executionId)
     throw new UnauthorizedError("unknown token");
-  const cred = await store.auth.getAgentCredential(row.agentName);
-  if (!cred || cred.status !== "active")
+  if (row.agentStatus !== "active" || row.agentGeneration !== row.generation)
     throw new UnauthorizedError("token revoked");
-  if (cred.generation !== row.generation)
-    throw new UnauthorizedError("token revoked");
-  const exec = await store.auth.getExecution(row.executionId);
   if (
-    !exec ||
-    exec.agentName !== row.agentName ||
-    exec.generation !== row.generation
+    !row.execState ||
+    row.execAgent !== row.agentName ||
+    row.execGeneration !== row.generation ||
+    !(row.execState === "running" || row.execState === "suspended")
   )
-    throw new UnauthorizedError("token revoked");
-  if (!(exec.state === "running" || exec.state === "suspended"))
     throw new UnauthorizedError("token revoked");
   return {
     kind: "agent",
@@ -403,12 +585,17 @@ export function httpServer(
         });
         let lastSent = 0;
         for (const e of events) {
-          res.write(`id: ${e.id}\nevent: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
+          res.write(
+            `id: ${e.id}\nevent: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`,
+          );
           lastSent = e.id;
         }
         if (lastSent === 0) {
           const h = req.headers["last-event-id"];
-          lastSent = h !== undefined ? Number(h) : (intParam(queryParams(req), "after") ?? 0);
+          lastSent =
+            h !== undefined
+              ? Number(h)
+              : (intParam(queryParams(req), "after") ?? 0);
           // No deletion/retention yet: resync would only fire if after < 1 were undeliverable.
         }
         let closed = false;
@@ -417,14 +604,18 @@ export function httpServer(
             const next = await svc.stream(
               {
                 after: lastSent,
-                types: queryParams(req).getAll("types").flatMap((s) => s.split(",")),
+                types: queryParams(req)
+                  .getAll("types")
+                  .flatMap((s) => s.split(",")),
                 goal: intParam(queryParams(req), "goal"),
                 agent: queryParams(req).get("agent") ?? undefined,
               },
               principal,
             );
             for (const e of next) {
-              res.write(`id: ${e.id}\nevent: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
+              res.write(
+                `id: ${e.id}\nevent: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`,
+              );
               lastSent = e.id;
             }
           } catch {}

@@ -175,6 +175,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   submitted_at timestamptz,
   verified_at timestamptz,
   attempt     int NOT NULL DEFAULT 0,
+  result      jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS verifications (

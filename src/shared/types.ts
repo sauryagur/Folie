@@ -111,6 +111,7 @@ export interface TaskRecord {
   claimedAt: string | null;
   submittedAt: string | null;
   verifiedAt: string | null;
+  result?: Record<string, unknown>;
 }
 export interface ProposeTaskRequest {
   agent: string;
@@ -148,6 +149,7 @@ export interface BudgetRecord {
   reserved: number;
   spent: number;
   status: string;
+  parentId: number | null;
 }
 export interface CreateBudgetRequest {
   name: string;

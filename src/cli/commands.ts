@@ -190,11 +190,17 @@ async function op(
   verb: "pause" | "resume",
 ): Promise<number> {
   const [agent] = args;
-  if (!agent || args.length !== 1) throw new Error(`usage: folie ${verb} <agent>`);
-  const { agent: name, state } = await api.agentOp(verb === "pause" ? "suspend" : "resume", agent);
+  if (!agent || args.length !== 1)
+    throw new Error(`usage: folie ${verb} <agent>`);
+  const { agent: name, state } = await api.agentOp(
+    verb === "pause" ? "suspend" : "resume",
+    agent,
+  );
   out(`${name}: ${state}`);
   return 0;
 }
 
-export const pause = (api: Api, args: string[], out: Out) => op(api, args, out, "pause");
-export const resume = (api: Api, args: string[], out: Out) => op(api, args, out, "resume");
+export const pause = (api: Api, args: string[], out: Out) =>
+  op(api, args, out, "pause");
+export const resume = (api: Api, args: string[], out: Out) =>
+  op(api, args, out, "resume");

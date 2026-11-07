@@ -39,6 +39,7 @@ console.log(`folie-agent ${name} up (runtime=${env.FOLIE_RUNTIME ?? "pi"})`);
 const loop = new AgentLoop(name, server, runtime, {
   tracer: telemetry.tracer,
   flush: () => telemetry.forceFlush(),
+  persistPath: "/workspace/.folie-undelivered.json",
 });
 await loop.run(Number(env.FOLIE_POLL_MS ?? 2000), stop.signal);
 await telemetry.shutdown();

@@ -123,9 +123,7 @@ export interface ExecutionRegistryRepo {
     state: string;
     providerRef?: unknown;
   }): Promise<void>;
-  get(
-    id: string,
-  ): Promise<{
+  get(id: string): Promise<{
     id: string;
     agent: string;
     state: string;
@@ -149,6 +147,7 @@ export interface BudgetRepo {
     dim: string;
   }): Promise<BudgetRecord>;
   get(id: number): Promise<BudgetRecord | null>;
+  list(): Promise<BudgetRecord[]>;
   /** Carve-out: single conditional reservation of parent headroom. */
   carveOut(
     parentId: number,
@@ -275,15 +274,18 @@ export interface AuthRepo {
   /** Set the operator token (hash only). */
   setOperatorToken(token: string): Promise<void>;
   /** Find a token by hash; returns the token row fields or null. */
-  findByHash(
-    hash: string,
-  ): Promise<{
+  findByHash(hash: string): Promise<{
     principal: string;
     kind: "agent" | "operator";
     agentName: string | null;
     executionId: string | null;
     generation: number;
     revokedAt: string | null;
+    agentStatus?: string | null;
+    agentGeneration?: number | null;
+    execAgent?: string | null;
+    execState?: string | null;
+    execGeneration?: number | null;
   } | null>;
   /** Revoke all agent tokens for an agent (revocation bumps generation, caller decides). */
   revokeAgentTokens(agent: string): Promise<void>;
@@ -368,7 +370,9 @@ export interface MemoryRepo {
 
 export interface ArtifactRepo {
   /** Content-addressed put; the same bytes always yield the same ref. */
-  put(input: ArtifactPutInput): Promise<{ sha256: string; bytes: number; ref: string }>;
+  put(
+    input: ArtifactPutInput,
+  ): Promise<{ sha256: string; bytes: number; ref: string }>;
   /** By ref or bare sha256; survives execution termination and agent retirement (R-4.4). */
   get(refOrHash: string): Promise<StoredArtifact | null>;
 }
@@ -406,9 +410,18 @@ export interface TeamRepo {
   get(id: number): Promise<TeamRecord | null>;
   getByName(name: string): Promise<TeamRecord | null>;
   list(status?: TeamStatus): Promise<TeamRecord[]>;
-  addMember(teamId: number, agent: string, label: string, responsibilities: string): Promise<TeamMember>;
+  addMember(
+    teamId: number,
+    agent: string,
+    label: string,
+    responsibilities: string,
+  ): Promise<TeamMember>;
   members(teamId: number): Promise<TeamMember[]>;
-  setResponsibility(teamId: number, agent: string, responsibilities: string): Promise<void>;
+  setResponsibility(
+    teamId: number,
+    agent: string,
+    responsibilities: string,
+  ): Promise<void>;
   setStatus(id: number, status: TeamStatus): Promise<TeamRecord | null>;
 }
 export type CapabilityLevel = "declared" | "assessed" | "verified";
@@ -427,12 +440,30 @@ export interface AgentCapability {
   verifier: string | null;
 }
 export interface CapabilityRepo {
-  define(b: { name: string; version?: string; description?: string; riskClass?: string }): Promise<CapabilityRecord>;
+  define(b: {
+    name: string;
+    version?: string;
+    description?: string;
+    riskClass?: string;
+  }): Promise<CapabilityRecord>;
   getByName(name: string): Promise<CapabilityRecord | null>;
   declare(agent: string, capabilityId: number): Promise<AgentCapability>;
-  assess(agent: string, capabilityId: number, probeResult: unknown, verifier: string): Promise<AgentCapability | null>;
-  verify(agent: string, capabilityId: number, probeResult: unknown, verifier: string): Promise<AgentCapability | null>;
-  getLevel(agent: string, capabilityId: number): Promise<CapabilityLevel | null>;
+  assess(
+    agent: string,
+    capabilityId: number,
+    probeResult: unknown,
+    verifier: string,
+  ): Promise<AgentCapability | null>;
+  verify(
+    agent: string,
+    capabilityId: number,
+    probeResult: unknown,
+    verifier: string,
+  ): Promise<AgentCapability | null>;
+  getLevel(
+    agent: string,
+    capabilityId: number,
+  ): Promise<CapabilityLevel | null>;
   listForAgent(agent: string): Promise<AgentCapability[]>;
 }
 export interface ProposalRecord {
@@ -460,8 +491,16 @@ export interface CoordinationRepo {
     limits?: QuotaLimits;
   }): Promise<ProposeOutcome>;
   listForGoal(goalId: number, limit?: number): Promise<ProposalRecord[]>;
-  recordDissent(taskId: number, contributor: string, note: string): Promise<number>;
-  listDissents(taskId: number): Promise<{ id: number; contributor: string; note: string; createdAt: string }[]>;
+  recordDissent(
+    taskId: number,
+    contributor: string,
+    note: string,
+  ): Promise<number>;
+  listDissents(
+    taskId: number,
+  ): Promise<
+    { id: number; contributor: string; note: string; createdAt: string }[]
+  >;
 }
 /** Append-only event ledger: one row per domain transition, written in the same tx as the state change. */
 export interface LedgerRepo {

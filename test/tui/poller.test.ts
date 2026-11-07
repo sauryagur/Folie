@@ -55,6 +55,8 @@ function fakeApi() {
       calls.push(`reports ${q.agent} ${q.limit}`),
       [report(2), report(1)]
     ),
+    stream: async () => [],
+    listBudgets: async () => [],
   };
   return { api, calls, queries };
 }
@@ -78,10 +80,10 @@ const withAgent = (s: TuiState) =>
   );
 
 describe("poll", () => {
-  it("asks for the newest page on first load, then only what follows the cursor", async () => {
+  it("asks for the oldest page on first load, then only what follows the cursor", async () => {
     const { api, queries } = fakeApi();
     await poll(api, initialState());
-    expect(queries[0]).toEqual({ limit: STREAM_PAGE });
+    expect(queries[0]).toEqual({ after: 0, limit: STREAM_PAGE });
 
     const seen = applyPoll(initialState(), {
       agents: [],
@@ -130,5 +132,41 @@ describe("poll", () => {
     const { api } = fakeApi();
     api.topics = async () => Promise.reject(new Error("ECONNREFUSED"));
     await expect(poll(api, initialState())).rejects.toThrow("ECONNREFUSED");
+  });
+
+  it("feeds alerts and budgets on the alerts/budgets views", async () => {
+    const { api } = fakeApi();
+    api.stream = async () => [
+      {
+        id: 1,
+        type: "verification.verdict",
+        aggregate: "verification",
+        aggregateId: "7",
+        actor: "agent:v",
+        payload: { verdict: "fail", agent: "v" },
+        correlationId: null,
+        causationId: null,
+        traceparent: null,
+        tracestate: null,
+        createdAt: "2026-11-04T12:00:00Z",
+      },
+    ];
+    api.listBudgets = async () => [
+      {
+        id: 1,
+        name: "root",
+        dim: "usd",
+        limitAmount: 10,
+        reserved: 0,
+        spent: 10,
+        status: "exhausted",
+        parentId: null,
+      },
+    ];
+    const r = await poll(api, setView(withAgent(initialState()), "alerts"));
+    expect(r.alertSignals).toHaveLength(2);
+    expect(r.alertSignals![0]!.kind).toBe("verification_rejected");
+    expect(r.alertSignals![1]!.kind).toBe("budget_exhausted");
+    expect(r.budgets).toHaveLength(1);
   });
 });

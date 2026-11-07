@@ -8,7 +8,9 @@ beforeAll(async () => (db = await testDatabase()));
 afterAll(() => db.close());
 
 beforeEach(async () => {
-  await db.query("UPDATE leader_state SET holder = '', expires_at = now() - interval '1 second'");
+  await db.query(
+    "UPDATE leader_state SET holder = '', expires_at = now() - interval '1 second'",
+  );
 });
 
 describe("LeaderElection", () => {
@@ -47,7 +49,9 @@ describe("LeaderElection", () => {
     await expect(a.tryAcquire()).resolves.toBe(true);
     await expect(b.tryAcquire()).resolves.toBe(false);
     // Simulate A's TTL lapsing (DB clock owns expiry): a crashed leader frees itself.
-    await db.query("UPDATE leader_state SET expires_at = now() - interval '1 second'");
+    await db.query(
+      "UPDATE leader_state SET expires_at = now() - interval '1 second'",
+    );
     await expect(b.tryAcquire()).resolves.toBe(true);
   });
 });

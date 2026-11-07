@@ -18,7 +18,22 @@ export function operatorTokenFromEnvOrFile(
 export async function withServerUrl<T>(
   fn: (url: string) => Promise<T>,
 ): Promise<T> {
-  if (process.env.FOLIE_SERVER_URL) return fn(process.env.FOLIE_SERVER_URL);
+  if (process.env.FOLIE_SERVER_URL) {
+    const u = new URL(process.env.FOLIE_SERVER_URL);
+    const h = u.hostname;
+    const local =
+      h === "localhost" ||
+      h === "127.0.0.1" ||
+      h.endsWith(".svc") ||
+      h.endsWith(".svc.cluster.local") ||
+      h === "folie-server" ||
+      h.startsWith("folie-server.");
+    if (!local && !process.env.FOLIE_ALLOW_REMOTE_SERVER)
+      throw new Error(
+        "FOLIE_SERVER_URL points to a non-local host; set FOLIE_ALLOW_REMOTE_SERVER=1 to send the operator token there",
+      );
+    return fn(process.env.FOLIE_SERVER_URL);
+  }
 
   const pf = Bun.spawn(
     [

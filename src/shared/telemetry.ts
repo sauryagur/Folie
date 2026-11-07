@@ -183,10 +183,13 @@ export function createTelemetry(opts: TelemetryOptions): Telemetry {
     description: "Time from claimed to verified",
     unit: "ms",
   });
-  const deliveryLatency = meter.createHistogram("folie.message.delivery.latency", {
-    description: "Time from message creation to lease",
-    unit: "ms",
-  });
+  const deliveryLatency = meter.createHistogram(
+    "folie.message.delivery.latency",
+    {
+      description: "Time from message creation to lease",
+      unit: "ms",
+    },
+  );
   const undelivered = meter.createCounter("folie.publication.undelivered", {
     description: "Publishes that reached zero subscribers",
   });

@@ -15,7 +15,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { context, trace, type Span } from "@opentelemetry/api";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import type { TSchema } from "typebox";
 import { Type } from "typebox";
@@ -183,6 +183,13 @@ export class PiRuntime implements Runtime {
           )
             throw new Error(`${p.path} is outside ${workdir}`);
           const info = await stat(file);
+          const real = await realpath(file);
+          const realDir = await realpath(workdir);
+          if (
+            relative(realDir, real).startsWith("..") ||
+            !real.startsWith(realDir + sep)
+          )
+            throw new Error(`${p.path} is outside ${workdir}`);
           if (!info.isFile()) throw new Error(`${p.path} is not a file`);
           const digest = await sha256(file);
           session.events.emit("artifact", {

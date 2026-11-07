@@ -31,7 +31,8 @@ export const MAX_RISK_BY_LEVEL: Record<CapabilityLevel, number> = {
 
 export function riskRank(riskClass: string): number {
   const r = RISK_RANK[riskClass];
-  if (r === undefined) throw new ValidationError(`riskClass: unknown ${riskClass}`);
+  if (r === undefined)
+    throw new ValidationError(`riskClass: unknown ${riskClass}`);
   return r;
 }
 
@@ -54,7 +55,12 @@ export function isEligible(
 
 export async function defineCapability(
   store: Store,
-  b: { name: string; version?: string; description?: string; riskClass?: string },
+  b: {
+    name: string;
+    version?: string;
+    description?: string;
+    riskClass?: string;
+  },
 ): Promise<CapabilityRecord> {
   const name = b.name.trim();
   if (!name) throw new ValidationError("name: non-empty required");
@@ -88,9 +94,16 @@ export async function assessCapability(
   }
   const cap = await store.capabilities.getByName(capabilityName);
   if (!cap) throw new ValidationError(`capability: unknown ${capabilityName}`);
-  const ac = await store.capabilities.assess(agent, cap.id, probeResult, verifier);
+  const ac = await store.capabilities.assess(
+    agent,
+    cap.id,
+    probeResult,
+    verifier,
+  );
   if (!ac) {
-    throw new ValidationError("invalid_transition: assess requires declared level");
+    throw new ValidationError(
+      "invalid_transition: assess requires declared level",
+    );
   }
   return { level: ac.level };
 }
@@ -107,9 +120,16 @@ export async function verifyCapability(
   }
   const cap = await store.capabilities.getByName(capabilityName);
   if (!cap) throw new ValidationError(`capability: unknown ${capabilityName}`);
-  const ac = await store.capabilities.verify(agent, cap.id, probeResult, verifier);
+  const ac = await store.capabilities.verify(
+    agent,
+    cap.id,
+    probeResult,
+    verifier,
+  );
   if (!ac) {
-    throw new ValidationError("invalid_transition: verify requires assessed level");
+    throw new ValidationError(
+      "invalid_transition: verify requires assessed level",
+    );
   }
   return { level: ac.level };
 }

@@ -35,7 +35,11 @@ describe("team lifecycle", () => {
     await store.agents.register("convener");
     await store.agents.register("alice");
     await store.agents.register("bob");
-    const root = await store.budgets.create({ name: "goal:1", limitAmount: 100, dim: "usd" });
+    const root = await store.budgets.create({
+      name: "goal:1",
+      limitAmount: 100,
+      dim: "usd",
+    });
     const team = await formTeam(store, {
       name: "alpha",
       scopeKind: "goal",
@@ -53,7 +57,9 @@ describe("team lifecycle", () => {
     await joinTeam(store, team.id, "bob", "dev", "backend");
     await setResponsibility(store, team.id, "alice", "frontend + tests");
     const members = await store.teams.members(team.id);
-    expect(members.find((m) => m.agent === "alice")?.responsibilities).toBe("frontend + tests");
+    expect(members.find((m) => m.agent === "alice")?.responsibilities).toBe(
+      "frontend + tests",
+    );
 
     const active = await activateTeam(store, team.id);
     expect(active.status).toBe("active");
@@ -93,7 +99,9 @@ describe("team lifecycle", () => {
       convener: "convener",
     });
     for (const n of names) await joinTeam(store, team.id, n);
-    await expect(joinTeam(store, team.id, "extra")).rejects.toThrow(/quota_exceeded/);
+    await expect(joinTeam(store, team.id, "extra")).rejects.toThrow(
+      /quota_exceeded/,
+    );
   });
 });
 
@@ -121,9 +129,18 @@ describe("discovery and negotiation", () => {
   it("records dissent notes for verification", async () => {
     await store.agents.register("owner");
     const wi = await store.workItems.create("goal x", "queued");
-    const t = await store.tasks.propose({ workItemId: wi.id, title: "t", spec: {} });
+    const t = await store.tasks.propose({
+      workItemId: wi.id,
+      title: "t",
+      spec: {},
+    });
     await store.agents.register("contributor");
-    const id = await recordDissent(store, t.id, "contributor", "disagree: use async");
+    const id = await recordDissent(
+      store,
+      t.id,
+      "contributor",
+      "disagree: use async",
+    );
     expect(id).toBeGreaterThan(0);
     const rows = await store.coordination.listDissents(t.id);
     expect(rows).toHaveLength(1);
@@ -134,7 +151,12 @@ describe("discovery and negotiation", () => {
 describe("runaway quotas and dedup", () => {
   it("rejects excess proposals on depth, fan-out, WIP and hourly rate", async () => {
     await store.agents.register("proposer");
-    const limits = { maxDepth: 1, maxFanOut: 1, maxWip: 2, maxProposalsPerHour: 2 };
+    const limits = {
+      maxDepth: 1,
+      maxFanOut: 1,
+      maxWip: 2,
+      maxProposalsPerHour: 2,
+    };
     const ok = await store.coordination.propose({
       goalId: 99,
       proposer: "proposer",
@@ -151,13 +173,22 @@ describe("runaway quotas and dedup", () => {
       limits,
     });
     expect(deep.ok).toBe(false);
-    if (!deep.ok && "quotaExceeded" in deep) expect(deep.quotaExceeded).toBe("depth");
+    if (!deep.ok && "quotaExceeded" in deep)
+      expect(deep.quotaExceeded).toBe("depth");
 
     // Pure checker agrees.
-    expect(checkQuota({ depth: 5, fanOut: 0, wip: 0, proposalsLastHour: 0 }, limits)).toBe("depth");
-    expect(checkQuota({ depth: 0, fanOut: 9, wip: 0, proposalsLastHour: 0 })).toBe("fan-out");
-    expect(checkQuota({ depth: 0, fanOut: 0, wip: 40, proposalsLastHour: 0 })).toBe("wip");
-    expect(checkQuota({ depth: 0, fanOut: 0, wip: 0, proposalsLastHour: 25 })).toBe("proposals/hour");
+    expect(
+      checkQuota({ depth: 5, fanOut: 0, wip: 0, proposalsLastHour: 0 }, limits),
+    ).toBe("depth");
+    expect(
+      checkQuota({ depth: 0, fanOut: 9, wip: 0, proposalsLastHour: 0 }),
+    ).toBe("fan-out");
+    expect(
+      checkQuota({ depth: 0, fanOut: 0, wip: 40, proposalsLastHour: 0 }),
+    ).toBe("wip");
+    expect(
+      checkQuota({ depth: 0, fanOut: 0, wip: 0, proposalsLastHour: 25 }),
+    ).toBe("proposals/hour");
 
     // WIP cap: goal 99 already has 1; allow one more then reject.
     const second = await store.coordination.propose({

@@ -22,6 +22,20 @@ import type {
   TopicInfo,
   WorkItem,
   WorkItemView,
+  LedgerEvent,
+  LedgerQuery,
+  BudgetRecord,
+  ClaimTaskRequest,
+  CloseBudgetRequest,
+  ControlReply,
+  CreateBudgetRequest,
+  ProposeTaskRequest,
+  RecordUsageRequest,
+  RecordVerdictRequest,
+  RequestVerificationRequest,
+  TaskClaim,
+  TaskRecord,
+  VerificationRecord,
 } from "./types";
 
 /** "?a=1&b=x" for the defined values, "" when there are none. */
@@ -59,6 +73,7 @@ export class FolieClient {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
     });
     const data = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok)
@@ -103,6 +118,17 @@ export class FolieClient {
   /** The audit log; see MessageQuery. */
   messages(q: MessageQuery = {}) {
     return this.req<Message[]>("GET", `/v1/messages${queryString({ ...q })}`);
+  }
+  /** The append-only ledger (state transitions); see LedgerQuery. */
+  stream(q: LedgerQuery = {}) {
+    const p = new URLSearchParams();
+    if (q.after !== undefined) p.set("after", String(q.after));
+    if (q.types?.length) p.set("types", q.types.join(","));
+    if (q.goal !== undefined) p.set("goal", String(q.goal));
+    if (q.agent !== undefined) p.set("agent", q.agent);
+    if (q.limit !== undefined) p.set("limit", String(q.limit));
+    const s = p.toString();
+    return this.req<LedgerEvent[]>("GET", `/v1/stream${s ? `?${s}` : ""}`);
   }
   reports(q: { agent?: string; limit?: number } = {}) {
     return this.req<Report[]>("GET", `/v1/reports${queryString({ ...q })}`);
@@ -162,5 +188,89 @@ export class FolieClient {
       `/v1/agents/${encodeURIComponent(agent)}/control`,
       { agent, reason },
     );
+  }
+  control(agent: string, after?: number) {
+    return this.req<ControlReply>(
+      "GET",
+      `/v1/agents/${encodeURIComponent(agent)}/control${after === undefined ? "" : `?after=${after}`}`,
+    );
+  }
+  proposeTask(r: ProposeTaskRequest) {
+    return this.req<TaskRecord>("POST", "/v1/tasks", r);
+  }
+  claimTask(agent: string, taskId: number) {
+    return this.req<TaskClaim>("POST", `/v1/tasks/${taskId}/claim`, { agent });
+  }
+  startTask(agent: string, taskId: number, fence: number) {
+    return this.req<TaskRecord>("POST", `/v1/tasks/${taskId}/start`, {
+      agent,
+      fence,
+    });
+  }
+  submitTask(
+    agent: string,
+    taskId: number,
+    fence: number,
+    result: Record<string, unknown>,
+  ) {
+    return this.req<TaskRecord>("POST", `/v1/tasks/${taskId}/submit`, {
+      agent,
+      fence,
+      result,
+    });
+  }
+  revokeTask(taskId: number) {
+    return this.req<TaskRecord>("POST", `/v1/tasks/${taskId}/revoke`, {});
+  }
+  setGoalPaused(workItemId: number, paused: boolean) {
+    return this.req<WorkItem>("POST", `/v1/work-items/${workItemId}/pause`, {
+      paused,
+    });
+  }
+  createBudget(r: CreateBudgetRequest) {
+    return this.req<BudgetRecord>("POST", "/v1/budgets", r);
+  }
+  listBudgets() {
+    return this.req<BudgetRecord[]>("GET", "/v1/budgets");
+  }
+  carveOut(parentId: number, name: string, limitAmount: number) {
+    return this.req<BudgetRecord>("POST", `/v1/budgets/${parentId}/carve-out`, {
+      name,
+      limitAmount,
+    });
+  }
+  recordUsage(
+    budgetId: number,
+    amount: number,
+    basis: "estimated" | "measured" | "external_charge",
+  ) {
+    return this.req<BudgetRecord>("POST", `/v1/budgets/${budgetId}/usage`, {
+      amount,
+      basis,
+    });
+  }
+  closeBudget(budgetId: number) {
+    return this.req<BudgetRecord>("POST", `/v1/budgets/${budgetId}/close`, {});
+  }
+  requestVerification(r: RequestVerificationRequest) {
+    return this.req<VerificationRecord>("POST", "/v1/verifications", r);
+  }
+  recordVerdict(
+    verificationId: number,
+    verifier: string,
+    verdict: "pass" | "fail" | "inconclusive",
+    confidence: number,
+    evidence: string[],
+  ) {
+    return this.req<VerificationRecord>(
+      "POST",
+      `/v1/verifications/${verificationId}/verdict`,
+      { verifier, verdict, confidence, evidence },
+    );
+  }
+  sweepLeases(limit = 100) {
+    return this.req<{ reclaimed: number }>("POST", "/v1/admin/sweep-leases", {
+      limit,
+    });
   }
 }

@@ -149,8 +149,6 @@ export class SwarmService {
     return `agent:${preferred}`;
   }
 
-
-
   /** Stream: operator sees all (optionally filtered); agents are forced to their own rows. */
   async stream(q: LedgerQuery, principal: Principal): Promise<LedgerEvent[]> {
     const after = q.after ?? 0;
@@ -389,7 +387,12 @@ export class SwarmService {
               aggregate: "message",
               aggregateId: String(sent.id),
               actor: this.ledgerActor(principal, sender),
-              payload: { agent: sender, from: sender, to, workItemId: sent.workItemId },
+              payload: {
+                agent: sender,
+                from: sender,
+                to,
+                workItemId: sent.workItemId,
+              },
               traceparent: t.traceparent,
               tracestate: t.tracestate,
             });
@@ -516,21 +519,30 @@ export class SwarmService {
       async (span) => {
         const sender = principal.kind === "agent" ? principal.name : from;
         const trace = storableTrace();
-        const { copies, duplicate } = await this.store.transaction(async (r) => {
-          const out = await r.topics.publish(t, sender, body, { requestId: id, trace });
-          if (!out.duplicate) {
-            await r.ledger.append({
-              type: "topic.published",
-              aggregate: "topic",
-              aggregateId: t,
-              actor: this.ledgerActor(principal, sender),
-              payload: { agent: sender, topic: t, delivered: out.copies.length },
-              traceparent: trace.traceparent,
-              tracestate: trace.tracestate,
+        const { copies, duplicate } = await this.store.transaction(
+          async (r) => {
+            const out = await r.topics.publish(t, sender, body, {
+              requestId: id,
+              trace,
             });
-          }
-          return out;
-        });
+            if (!out.duplicate) {
+              await r.ledger.append({
+                type: "topic.published",
+                aggregate: "topic",
+                aggregateId: t,
+                actor: this.ledgerActor(principal, sender),
+                payload: {
+                  agent: sender,
+                  topic: t,
+                  delivered: out.copies.length,
+                },
+                traceparent: trace.traceparent,
+                tracestate: trace.tracestate,
+              });
+            }
+            return out;
+          },
+        );
         span.setAttribute("folie.delivered", copies.length);
         if (duplicate) span.setAttribute("folie.duplicate", true);
         if (copies.length === 0) this.obs.metrics.publicationUndelivered();
@@ -653,6 +665,8 @@ export class SwarmService {
       throw new ValidationError(
         `workItemId: unknown work item ${req.workItemId}`,
       );
+    if (wi.paused)
+      throw new ValidationError("workItemId: paused — proposals blocked");
     const trace = storableTrace();
     const task = await this.store.transaction(async (r) => {
       const created = await r.tasks.propose({
@@ -665,7 +679,12 @@ export class SwarmService {
         aggregate: "task",
         aggregateId: String(created.id),
         actor: this.ledgerActor(principal, agent),
-        payload: { agent, workItemId: req.workItemId, taskId: created.id, title },
+        payload: {
+          agent,
+          workItemId: req.workItemId,
+          taskId: created.id,
+          title,
+        },
         traceparent: trace.traceparent,
         tracestate: trace.tracestate,
       });
@@ -706,7 +725,12 @@ export class SwarmService {
         aggregate: "task",
         aggregateId: String(claimed.task.id),
         actor: this.ledgerActor(principal, agent),
-        payload: { agent, workItemId: claimed.task.workItemId, taskId: claimed.task.id, fence: claimed.fence },
+        payload: {
+          agent,
+          workItemId: claimed.task.workItemId,
+          taskId: claimed.task.id,
+          fence: claimed.fence,
+        },
         traceparent: trace.traceparent,
         tracestate: trace.tracestate,
       });
@@ -714,8 +738,10 @@ export class SwarmService {
     });
     this.obs.metrics.taskTransition({ from: "available", to: "claimed" });
     if (out.task.createdAt && out.task.claimedAt) {
-      const ms = Date.parse(out.task.claimedAt) - Date.parse(out.task.createdAt);
-      if (Number.isFinite(ms) && ms >= 0) this.obs.metrics.taskClaimLatency({ ms });
+      const ms =
+        Date.parse(out.task.claimedAt) - Date.parse(out.task.createdAt);
+      if (Number.isFinite(ms) && ms >= 0)
+        this.obs.metrics.taskClaimLatency({ ms });
     }
     return {
       taskId: out.task.id,
@@ -748,7 +774,12 @@ export class SwarmService {
         aggregate: "task",
         aggregateId: String(out.id),
         actor: this.ledgerActor(principal, agent),
-        payload: { agent, workItemId: out.workItemId, taskId: out.id, fence: req.fence },
+        payload: {
+          agent,
+          workItemId: out.workItemId,
+          taskId: out.id,
+          fence: req.fence,
+        },
         traceparent: trace.traceparent,
         tracestate: trace.tracestate,
       });
@@ -786,7 +817,12 @@ export class SwarmService {
         aggregate: "task",
         aggregateId: String(out.id),
         actor: this.ledgerActor(principal, agent),
-        payload: { agent, workItemId: out.workItemId, taskId: out.id, fence: req.fence },
+        payload: {
+          agent,
+          workItemId: out.workItemId,
+          taskId: out.id,
+          fence: req.fence,
+        },
         traceparent: trace.traceparent,
         tracestate: trace.tracestate,
       });
@@ -796,7 +832,10 @@ export class SwarmService {
     return submitted;
   }
   /** Reclaim tasks whose lease expired (R-8.4): fence+attempt bump, stale submits rejected. */
-  async sweepLeases(limit = 100, principal: Principal): Promise<{ reclaimed: number }> {
+  async sweepLeases(
+    limit = 100,
+    principal: Principal,
+  ): Promise<{ reclaimed: number }> {
     this.requireOperator(principal);
     if (!Number.isInteger(limit) || limit < 1)
       throw new ValidationError("limit: positive integer required");
@@ -830,25 +869,35 @@ export class SwarmService {
     const trace = storableTrace();
     const out = await this.store.transaction(async (r) => {
       const revoked = await r.tasks.revoke(taskId);
-      if (!revoked)
-        throw new ValidationError(`taskId: not claimed ${taskId}`);
+      if (!revoked) throw new ValidationError(`taskId: not claimed ${taskId}`);
       await r.ledger.append({
         type: "task.revoked",
         aggregate: "task",
         aggregateId: String(revoked.id),
         actor: this.ledgerActor(principal, "human"),
-        payload: { taskId: revoked.id, workItemId: revoked.workItemId, fence: revoked.fence },
+        payload: {
+          taskId: revoked.id,
+          workItemId: revoked.workItemId,
+          fence: revoked.fence,
+        },
         traceparent: trace.traceparent,
         tracestate: trace.tracestate,
       });
       return revoked;
     });
-    this.obs.metrics.taskTransition({ from: prev?.status ?? "claimed", to: "available" });
+    this.obs.metrics.taskTransition({
+      from: prev?.status ?? "claimed",
+      to: "available",
+    });
     return out;
   }
 
   /** Pause/resume a goal (R-7.3): pauses block new claims immediately. */
-  async setGoalPaused(workItemId: number, paused: boolean, principal: Principal): Promise<WorkItem> {
+  async setGoalPaused(
+    workItemId: number,
+    paused: boolean,
+    principal: Principal,
+  ): Promise<WorkItem> {
     this.requireOperator(principal);
     if (!Number.isInteger(workItemId) || workItemId <= 0)
       throw new ValidationError("workItemId: positive integer required");
@@ -905,7 +954,13 @@ export class SwarmService {
         aggregate: "verification",
         aggregateId: String(out.id),
         actor: this.ledgerActor(principal, verifier),
-        payload: { agent: verifier, workItemId: t.workItemId, taskId: req.taskId, check, verifier },
+        payload: {
+          agent: verifier,
+          workItemId: t.workItemId,
+          taskId: req.taskId,
+          check,
+          verifier,
+        },
         traceparent: trace.traceparent,
         tracestate: trace.tracestate,
       });
@@ -966,7 +1021,12 @@ export class SwarmService {
         aggregate: "verification",
         aggregateId: String(decided.id),
         actor: this.ledgerActor(principal, verifier),
-        payload: { agent: verifier, workItemId: task?.workItemId ?? null, taskId: v.taskId, verdict: req.verdict },
+        payload: {
+          agent: verifier,
+          workItemId: task?.workItemId ?? null,
+          taskId: v.taskId,
+          verdict: req.verdict,
+        },
         traceparent: trace.traceparent,
         tracestate: trace.tracestate,
       });
@@ -991,12 +1051,17 @@ export class SwarmService {
       }
       return { decided, verified };
     });
-    this.obs.metrics.verificationResult({ kind: "contract", result: req.verdict });
+    this.obs.metrics.verificationResult({
+      kind: "contract",
+      result: req.verdict,
+    });
     if (verified) {
       this.obs.metrics.taskVerified();
       if (verified.claimedAt && verified.verifiedAt) {
-        const ms = Date.parse(verified.verifiedAt) - Date.parse(verified.claimedAt);
-        if (Number.isFinite(ms) && ms >= 0) this.obs.metrics.taskTimeToVerified({ ms });
+        const ms =
+          Date.parse(verified.verifiedAt) - Date.parse(verified.claimedAt);
+        if (Number.isFinite(ms) && ms >= 0)
+          this.obs.metrics.taskTimeToVerified({ ms });
       }
     }
     return decided;
@@ -1090,7 +1155,11 @@ export class SwarmService {
     if (!exists) throw new NotFoundError(`unknown agent ${who}`);
     const trace = storableTrace();
     const id = await this.store.transaction(async (r) => {
-      const cursor = await r.control.queue({ agent: who, type: "cancel", reason });
+      const cursor = await r.control.queue({
+        agent: who,
+        type: "cancel",
+        reason,
+      });
       await r.ledger.append({
         type: "control.cancel_queued",
         aggregate: "agent",
@@ -1115,6 +1184,10 @@ export class SwarmService {
     return n;
   }
 
+  async listBudgets(principal: Principal): Promise<BudgetRecord[]> {
+    this.requireOperator(principal);
+    return this.store.budgets.list();
+  }
   async createBudget(
     req: CreateBudgetRequest,
     principal: Principal,
@@ -1200,29 +1273,41 @@ export class SwarmService {
       throw new ValidationError(`basis: unknown ${JSON.stringify(req.basis)}`);
     const amount = this.amountOf(req.amount, "amount");
     const trace = storableTrace();
-    const out = await this.store.transaction(async (r) => {
-      const before = await r.budgets.get(req.budgetId);
-      const committed = await r.budgets.commit(req.budgetId, amount, req.basis);
-      if (!committed)
-        throw new ValidationError(`budgetId: unknown or closed ${req.budgetId}`);
-      await r.ledger.append({
-        type: "budget.usage",
-        aggregate: "budget",
-        aggregateId: String(committed.id),
-        actor: this.ledgerActor(principal, "human"),
-        payload: { budgetId: committed.id, amount, basis: req.basis },
-        traceparent: trace.traceparent,
-        tracestate: trace.tracestate,
+    const out = await this.store
+      .transaction(async (r) => {
+        const before = await r.budgets.get(req.budgetId);
+        const committed = await r.budgets.commit(
+          req.budgetId,
+          amount,
+          req.basis,
+        );
+        if (!committed)
+          throw new ValidationError(
+            `budgetId: unknown or closed ${req.budgetId}`,
+          );
+        await r.ledger.append({
+          type: "budget.usage",
+          aggregate: "budget",
+          aggregateId: String(committed.id),
+          actor: this.ledgerActor(principal, "human"),
+          payload: { budgetId: committed.id, amount, basis: req.basis },
+          traceparent: trace.traceparent,
+          tracestate: trace.tracestate,
+        });
+        return { committed, before };
+      })
+      .then(({ committed, before }) => {
+        this.obs.metrics.llmCost({ amount, basis: req.basis });
+        if (
+          before &&
+          before.status !== "exhausted" &&
+          committed.status === "exhausted"
+        ) {
+          this.obs.metrics.budgetExhausted({ dim: committed.dim });
+          this.obs.metrics.budgetOverrun({ dim: committed.dim });
+        }
+        return committed;
       });
-      return { committed, before };
-    }).then(({ committed, before }) => {
-      this.obs.metrics.llmCost({ amount, basis: req.basis });
-      if (before && before.status !== "exhausted" && committed.status === "exhausted") {
-        this.obs.metrics.budgetExhausted({ dim: committed.dim });
-        this.obs.metrics.budgetOverrun({ dim: committed.dim });
-      }
-      return committed;
-    });
     return out;
   }
 
@@ -1343,7 +1428,11 @@ export class SwarmService {
               aggregate: "report",
               aggregateId: String(report.id),
               actor: this.ledgerActor(principal, agent),
-              payload: { agent, workItemId: itemIds[0] ?? null, outcome: req.outcome },
+              payload: {
+                agent,
+                workItemId: itemIds[0] ?? null,
+                outcome: req.outcome,
+              },
               traceparent: trace.traceparent,
               tracestate: trace.tracestate,
             });

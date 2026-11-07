@@ -77,7 +77,8 @@ const toMessage = (r: Row): Message => ({
   tracestate: (r.tracestate as string | null) ?? null,
 });
 
-const WORK_ITEM_COLS = "id, goal, state, paused, created_at, traceparent, tracestate";
+const WORK_ITEM_COLS =
+  "id, goal, state, paused, created_at, traceparent, tracestate";
 
 const toWorkItem = (r: Row): WorkItem => ({
   id: r.id as number,
@@ -535,7 +536,13 @@ const auth = (q: Queryable): AuthRepo => ({
   },
   async findByHash(hash) {
     const { rows } = await q.query(
-      "SELECT principal, kind, agent_name, execution_id, generation, revoked_at FROM api_tokens WHERE token_hash = $1",
+      `SELECT t.principal, t.kind, t.agent_name, t.execution_id, t.generation, t.revoked_at,
+              a.status AS agent_status, a.credential_generation AS agent_generation,
+              e.agent_name AS exec_agent, e.state AS exec_state, e.generation AS exec_generation
+       FROM api_tokens t
+       LEFT JOIN agents a ON a.name = t.agent_name
+       LEFT JOIN executions e ON e.id = t.execution_id
+       WHERE t.token_hash = $1`,
       [hash],
     );
     if (!rows[0]) return null;
@@ -547,6 +554,17 @@ const auth = (q: Queryable): AuthRepo => ({
       executionId: (r.execution_id as string | null) ?? null,
       generation: r.generation as number,
       revokedAt: (r.revoked_at ? iso(r.revoked_at) : null) as string | null,
+      agentStatus: (r.agent_status as string | null) ?? null,
+      agentGeneration:
+        r.agent_generation === null || r.agent_generation === undefined
+          ? null
+          : Number(r.agent_generation),
+      execAgent: (r.exec_agent as string | null) ?? null,
+      execState: (r.exec_state as string | null) ?? null,
+      execGeneration:
+        r.exec_generation === null || r.exec_generation === undefined
+          ? null
+          : Number(r.exec_generation),
     };
   },
   async revokeAgentTokens(agent) {
@@ -629,6 +647,28 @@ const sessions = (q: Queryable): SessionRepo => ({
     clientRequestId,
     publicId,
   }) {
+    if (publicId) {
+      const { rows } = await q.query(
+        `INSERT INTO sessions (agent, started_at, message_ids, state, work_item_id, client_request_id, public_id)
+         VALUES ($1,$2,$3::int[],'running',$4,$5,$6)
+         ON CONFLICT (public_id) WHERE public_id IS NOT NULL DO NOTHING
+         RETURNING ${SESSION_COLS}`,
+        [
+          agent,
+          startedAt,
+          messageIds,
+          workItemId ?? null,
+          clientRequestId ?? null,
+          publicId,
+        ],
+      );
+      if (rows[0]) return toSession(rows[0]);
+      const raced = await q.query(
+        `SELECT ${SESSION_COLS} FROM sessions WHERE public_id = $1`,
+        [publicId],
+      );
+      return toSession(raced.rows[0]!);
+    }
     const { rows } = await q.query(
       `INSERT INTO sessions (agent, started_at, message_ids, state, work_item_id, client_request_id, public_id)
        VALUES ($1,$2,$3::int[],'running',$4,$5,$6) RETURNING ${SESSION_COLS}`,
@@ -638,7 +678,7 @@ const sessions = (q: Queryable): SessionRepo => ({
         messageIds,
         workItemId ?? null,
         clientRequestId ?? null,
-        publicId ?? null,
+        null,
       ],
     );
     return toSession(rows[0]!);
@@ -732,7 +772,8 @@ const registry = (q: Queryable): ExecutionRegistryRepo => ({
     );
   },
 });
-const TASK_COLS = "id, work_item_id, title, spec, status, fence, owner, created_at, claimed_at, submitted_at, verified_at";
+const TASK_COLS =
+  "id, work_item_id, title, spec, status, fence, owner, created_at, claimed_at, submitted_at, verified_at, result";
 const toTask = (r: Row) => ({
   id: r.id as number,
   workItemId: r.work_item_id as number,
@@ -748,6 +789,9 @@ const toTask = (r: Row) => ({
   claimedAt: r.claimed_at ? iso(r.claimed_at) : null,
   submittedAt: r.submitted_at ? iso(r.submitted_at) : null,
   verifiedAt: r.verified_at ? iso(r.verified_at) : null,
+  result: (typeof r.result === "string"
+    ? JSON.parse(r.result)
+    : (r.result ?? {})) as Record<string, unknown>,
 });
 const tasks = (q: Queryable): TaskRepo => ({
   async propose({ workItemId, title, spec }) {
@@ -768,7 +812,7 @@ const tasks = (q: Queryable): TaskRepo => ({
     const leaseSec = `${Math.max(1, Math.round(leaseMs / 1000))} seconds`;
     const { rows } = await q.query(
       `UPDATE tasks SET status='claimed', claimed_at=now(), fence = fence + 1, owner=$2, lease_expires_at = now() + ($3::text)::interval
-       WHERE id=$1 AND status='available' RETURNING ${TASK_COLS}`,
+       WHERE id=$1 AND status='available' AND NOT EXISTS (SELECT 1 FROM work_items w WHERE w.id = tasks.work_item_id AND w.paused) RETURNING ${TASK_COLS}`,
       [taskId, agent, leaseSec],
     );
     if (!rows[0]) return null;
@@ -786,10 +830,10 @@ const tasks = (q: Queryable): TaskRepo => ({
     );
     return rows[0] ? toTask(rows[0]) : null;
   },
-  async submit(taskId, fence, _result) {
+  async submit(taskId, fence, result) {
     const { rows } = await q.query(
-      `UPDATE tasks SET status='submitted', submitted_at=now() WHERE id=$1 AND status='running' AND fence=$2 RETURNING ${TASK_COLS}`,
-      [taskId, fence],
+      `UPDATE tasks SET status='submitted', submitted_at=now(), result=$3::jsonb WHERE id=$1 AND status='running' AND fence=$2 RETURNING ${TASK_COLS}`,
+      [taskId, fence, JSON.stringify(result ?? {})],
     );
     if (!rows[0]) return null;
     await q.query(
@@ -813,7 +857,7 @@ const tasks = (q: Queryable): TaskRepo => ({
     const reclaimed = [];
     for (const row of rows as { id: number }[]) {
       const { rows: updated } = await q.query(
-        `UPDATE tasks SET status='available', owner=NULL, fence=fence+1, attempt=attempt+1, lease_expires_at=NULL WHERE id=$1 RETURNING ${TASK_COLS}`,
+        `UPDATE tasks SET status='available', owner=NULL, fence=fence+1, attempt=attempt+1, lease_expires_at=NULL WHERE id=$1 AND status IN ('claimed','running') AND lease_expires_at IS NOT NULL AND lease_expires_at < now() AND attempt < 3 RETURNING ${TASK_COLS}`,
         [row.id],
       );
       if (!updated[0]) continue;
@@ -822,6 +866,16 @@ const tasks = (q: Queryable): TaskRepo => ({
         [row.id],
       );
       reclaimed.push(toTask(updated[0]));
+    }
+    const { rows: dead } = await q.query(
+      `UPDATE tasks SET status='failed', owner=NULL, fence=fence+1, lease_expires_at=NULL WHERE status IN ('claimed','running') AND lease_expires_at IS NOT NULL AND lease_expires_at < now() AND attempt >= 3 RETURNING ${TASK_COLS}`,
+    );
+    for (const row of dead as unknown as Row[]) {
+      await q.query(
+        `UPDATE task_claims SET state='expired', ended_at=now() WHERE task_id=$1 AND state='active'`,
+        [row.id as number],
+      );
+      reclaimed.push(toTask(row));
     }
     return reclaimed;
   },
@@ -855,6 +909,7 @@ const toBudget = (r: Row): BudgetRecord => ({
   reserved: Number(r.reserved),
   spent: Number(r.spent),
   status: r.status as string,
+  parentId: (r.parent_id as number | null) ?? null,
 });
 const budgets = (q: Queryable): BudgetRepo => ({
   async create({ parentId, name, limitAmount, dim }) {
@@ -871,9 +926,15 @@ const budgets = (q: Queryable): BudgetRepo => ({
     );
     return rows[0] ? toBudget(rows[0]) : null;
   },
+  async list() {
+    const { rows } = await q.query(
+      `SELECT ${BUDGET_COLS} FROM budgets ORDER BY id`,
+    );
+    return rows.map(toBudget);
+  },
   async carveOut(parentId, name, limitAmount) {
     const { rows } = await q.query(
-      `UPDATE budgets SET reserved = reserved + $2 WHERE id=$1 AND limit_amount - reserved - spent >= $2 RETURNING ${BUDGET_COLS}`,
+      `UPDATE budgets SET reserved = reserved + $2 WHERE id=$1 AND status <> 'closed' AND limit_amount - reserved - spent >= $2 RETURNING ${BUDGET_COLS}`,
       [parentId, limitAmount],
     );
     if (!rows[0]) return null;
@@ -908,23 +969,24 @@ const budgets = (q: Queryable): BudgetRepo => ({
     );
     const r = rows[0];
     if (!r) return;
-    await q.query(
-      `UPDATE budgets SET reserved = reserved - $2 WHERE id=$1`,
-      [r.budget_id as number, Number(r.amount)],
-    );
+    await q.query(`UPDATE budgets SET reserved = reserved - $2 WHERE id=$1`, [
+      r.budget_id as number,
+      Number(r.amount),
+    ]);
   },
   async commit(budgetId, amount, basis) {
-    await q.query(
-      `INSERT INTO usage_records (budget_id, amount, basis) VALUES ($1,$2,$3)`,
-      [budgetId, amount, basis],
-    );
     const { rows } = await q.query(
       `UPDATE budgets SET spent = spent + $2,
          status = CASE WHEN spent + $2 > limit_amount THEN 'exhausted' ELSE status END
        WHERE id=$1 AND status <> 'closed' RETURNING ${BUDGET_COLS}`,
       [budgetId, amount],
     );
-    return rows[0] ? toBudget(rows[0]) : null;
+    if (!rows[0]) return null;
+    await q.query(
+      `INSERT INTO usage_records (budget_id, amount, basis) VALUES ($1,$2,$3)`,
+      [budgetId, amount, basis],
+    );
+    return toBudget(rows[0]);
   },
   async close(budgetId) {
     const { rows } = await q.query(
@@ -1043,7 +1105,10 @@ const control = (q: Queryable): ControlRepo => ({
 const MEMORY_COLS =
   "id, scope, scope_id, kind, content, data, provenance, origin_goal_id, portable, status, confidence, superseded_by, task_id, created_by, created_at";
 const json = (v: unknown): Record<string, unknown> =>
-  (typeof v === "string" ? JSON.parse(v) : (v ?? {})) as Record<string, unknown>;
+  (typeof v === "string" ? JSON.parse(v) : (v ?? {})) as Record<
+    string,
+    unknown
+  >;
 const toMemory = (r: Row): MemoryEntry => ({
   id: r.id as number,
   scope: r.scope as MemoryScope,
@@ -1116,13 +1181,16 @@ const memories = (q: Queryable): MemoryRepo => ({
       const teams = bindParam(as.teams ?? []);
       const goals = bindParam(as.goals ?? []);
       const swarm = bindParam(as.swarm ?? false);
-      conds.push(`((scope='agent' AND scope_id=${name}) OR (scope='team' AND scope_id = ANY(${teams}::text[])) OR (scope='goal' AND scope_id = ANY(${goals}::text[])) OR (scope='swarm' AND ${swarm}))`);
+      conds.push(
+        `((scope='agent' AND scope_id=${name}) OR (scope='team' AND scope_id = ANY(${teams}::text[])) OR (scope='goal' AND scope_id = ANY(${goals}::text[])) OR (scope='swarm' AND ${swarm}))`,
+      );
     }
     if (query.scope) conds.push(`scope=${bindParam(query.scope)}`);
     if (query.scopeId) conds.push(`scope_id=${bindParam(query.scopeId)}`);
     if (query.portableOnly) conds.push(`scope='agent' AND portable`);
     if (query.text) conds.push(`content ILIKE ${bindParam(`%${query.text}%`)}`);
-    if (query.kinds?.length) conds.push(`kind = ANY(${bindParam(query.kinds)}::text[])`);
+    if (query.kinds?.length)
+      conds.push(`kind = ANY(${bindParam(query.kinds)}::text[])`);
     const limit = bindParam(query.limit ?? 50);
     const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
     const { rows } = await q.query(
@@ -1216,7 +1284,11 @@ const artifacts = (q: Queryable): ArtifactRepo => ({
       [hash],
     );
     const r = existing[0]!;
-    return { sha256: r.sha256 as string, ref: r.ref as string, bytes: Number(r.bytes) };
+    return {
+      sha256: r.sha256 as string,
+      ref: r.ref as string,
+      bytes: Number(r.bytes),
+    };
   },
   async get(refOrHash) {
     const hash = artifactHash(refOrHash);
@@ -1275,7 +1347,10 @@ const teams = (q: Queryable): TeamRepo => ({
   },
   async list(status) {
     const { rows } = status
-      ? await q.query(`SELECT ${TEAM_COLS} FROM teams WHERE status=$1 ORDER BY id`, [status])
+      ? await q.query(
+          `SELECT ${TEAM_COLS} FROM teams WHERE status=$1 ORDER BY id`,
+          [status],
+        )
       : await q.query(`SELECT ${TEAM_COLS} FROM teams ORDER BY id`);
     return rows.map(toTeam);
   },

@@ -88,7 +88,8 @@ export function parseCommand(input: string, selected: string | null): Parsed {
     case "cancel": {
       const agent = args[0] ?? selected;
       if (!agent) return err("usage: cancel <agent> [reason]");
-      const reason = args.slice(agent === args[0] ? 1 : 0).join(" ") || "cancelled from TUI";
+      const reason =
+        args.slice(agent === args[0] ? 1 : 0).join(" ") || "cancelled from TUI";
       return { kind: "cancel", agent, reason };
     }
     case "view": {
@@ -104,7 +105,13 @@ export function parseCommand(input: string, selected: string | null): Parsed {
 
 export type CommandApi = Pick<
   FolieClient,
-  "submitGoal" | "send" | "publish" | "subscribe" | "unsubscribe" | "agentOp" | "queueCancel"
+  | "submitGoal"
+  | "send"
+  | "publish"
+  | "subscribe"
+  | "unsubscribe"
+  | "agentOp"
+  | "queueCancel"
 >;
 
 /** Runs a server-side command and returns the one-line result to show. Throws on server errors. */

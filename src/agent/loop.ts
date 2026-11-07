@@ -5,6 +5,8 @@
 // Mid-session mail for the same scope reaches the runtime through `Session.takeNewMail`, and the final report acks
 // the initial batch and everything taken since.
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { trace, type Tracer } from "@opentelemetry/api";
 import type { FolieClient } from "../shared/client";
 import { jsonLogger, type LogSink } from "../shared/logger";
@@ -15,7 +17,7 @@ import type { Runtime, Session, SessionResult } from "./runtime";
 
 export type AgentServer = Pick<
   FolieClient,
-  "inbox" | "report" | "sessionEvents"
+  "inbox" | "report" | "sessionEvents" | "control"
 >;
 
 export interface LoopDeps {
@@ -25,6 +27,8 @@ export interface LoopDeps {
   newSessionId?: () => string;
   /** Called after each session settles, so its spans leave the sandbox before it can be suspended. */
   flush?: () => Promise<void>;
+  /** Disk path for undelivered-report persistence. Unset: in-memory only (tests). */
+  persistPath?: string;
 }
 
 const consoleOut: LogSink = {
@@ -37,6 +41,7 @@ export class AgentLoop {
   private readonly out: LogSink;
   private readonly newSessionId: () => string;
   private readonly flush: () => Promise<void>;
+  private readonly persistPath?: string;
   /** A finished session's report the server has not accepted yet. Re-sent before any new work, never re-computed. */
   private undelivered: SubmitReportRequest | null = null;
   /** The session currently running, if any. `cancelActive` aborts it; cleared when it settles. */
@@ -52,6 +57,24 @@ export class AgentLoop {
     this.out = deps.out ?? consoleOut;
     this.newSessionId = deps.newSessionId ?? randomUUID;
     this.flush = deps.flush ?? (async () => {});
+    this.persistPath = deps.persistPath;
+    if (this.persistPath) {
+      try {
+        const raw = readFileSync(this.persistPath, "utf8");
+        this.undelivered = JSON.parse(raw) as SubmitReportRequest;
+      } catch {
+        // No stored report (first run or corrupt file): start clean.
+      }
+    }
+  }
+
+  private async persistUndelivered(): Promise<void> {
+    if (!this.persistPath) return;
+    if (this.undelivered)
+      await writeFile(this.persistPath, JSON.stringify(this.undelivered)).catch(
+        () => {},
+      );
+    else await writeFile(this.persistPath, "null").catch(() => {});
   }
 
   /**
@@ -70,6 +93,7 @@ export class AgentLoop {
     if (this.undelivered) {
       await this.server.report(this.undelivered);
       this.undelivered = null;
+      await this.persistUndelivered();
       return true;
     }
     const unread = await this.server.inbox(this.name);
@@ -202,6 +226,7 @@ export class AgentLoop {
         } catch (e) {
           // The work is done; do not redo it. Keep the report and re-send it on the next tick.
           this.undelivered = report;
+          await this.persistUndelivered();
           log.error(
             `report delivery failed, will resend: ${e instanceof Error ? e.message : e}`,
           );
@@ -214,8 +239,23 @@ export class AgentLoop {
 
   async run(pollMs: number, signal: AbortSignal): Promise<void> {
     // Shutdown aborts the running session instead of orphaning it; tick semantics are unchanged.
-    signal.addEventListener("abort", () => this.cancelActive("stopping on shutdown"), { once: true });
+    signal.addEventListener(
+      "abort",
+      () => this.cancelActive("stopping on shutdown"),
+      { once: true },
+    );
+    let controlAfter = 0;
     while (!signal.aborted) {
+      try {
+        const ctrl = await this.server.control(this.name, controlAfter);
+        controlAfter = ctrl.cursor;
+        for (const a of ctrl.actions) {
+          if (a.type === "cancel" || a.type === "stop")
+            this.cancelActive(a.reason);
+        }
+      } catch {
+        // Control poll is best effort; a failed poll must not kill the mail loop.
+      }
       let ran = false;
       try {
         ran = await this.tick();
@@ -228,7 +268,11 @@ export class AgentLoop {
           }),
         );
       }
-      if (!ran) await new Promise((r) => setTimeout(r, pollMs));
+      if (!ran) {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        setTimeout(resolve, pollMs);
+        await promise;
+      }
     }
   }
 }

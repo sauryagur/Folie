@@ -35,6 +35,7 @@ import {
 } from "./model";
 import { poll, type PollApi } from "./poller";
 import type { FolieClient } from "../shared/client";
+import type { SessionEvent } from "../shared/types";
 
 export interface AppDeps {
   api: PollApi & CommandApi & Partial<Pick<FolieClient, "readEvents">>;
@@ -155,7 +156,7 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
     const views = VIEWS.map((v, i) =>
       v === state.view ? `[${i + 1}:${v}]` : ` ${i + 1}:${v} `,
     ).join(" ");
-    header.content = ` folie   ${views}   ✗ ${alertBadge(state.alertSignals)} (a)   ${state.connected ? "● connected" : "○ offline"}`;
+    header.content = `${views} ✗ ${alertBadge(state.alertSignals)} ${state.connected ? "● connected" : "○ offline"}`;
 
     const rows = fleetRows(state.agents, now());
     fleetHeader.content = fleetHeaderText(state.agents);
@@ -181,9 +182,24 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
     inFlight = true;
     try {
       let result = await poll(deps.api, state);
-      if (state.view === "inspector" && state.selected !== null && typeof deps.api.readEvents === "function") {
-        const sessionEvents = await deps.api.readEvents({ agent: state.selected, limit: 1000 });
-        result = { ...result, sessionEvents, forAgent: state.selected };
+      if (
+        state.view === "inspector" &&
+        state.selected !== null &&
+        typeof deps.api.readEvents === "function"
+      ) {
+        const all: SessionEvent[] = [];
+        let after: number | undefined;
+        for (let i = 0; i < 5; i++) {
+          const page = await deps.api.readEvents({
+            agent: state.selected,
+            after,
+            limit: 1000,
+          });
+          all.push(...page);
+          if (page.length < 1000) break;
+          after = page[page.length - 1]!.id;
+        }
+        result = { ...result, sessionEvents: all, forAgent: state.selected };
       }
       state = applyPoll(state, result);
     } catch (e) {
@@ -204,17 +220,32 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
     if (/^:?\s*cancel\s+session\b/.test(text)) {
       const inspector = buildInspector(state.selected, state.sessionEvents);
       const confirmed = /\bconfirm\b/.test(text);
-      const cmd = confirmCancelSession(requestCancelSession(inspector, confirmed));
-      if (!cmd.sessionId) state = withStatus(state, "cancel session: no session loaded");
+      const cmd = confirmCancelSession(
+        requestCancelSession(inspector, confirmed),
+      );
+      if (!cmd.sessionId)
+        state = withStatus(state, "cancel session: no session loaded");
       else if (!cmd.confirmed) state = withStatus(state, cancelPrompt(cmd));
       else if (deps.api.queueCancel === undefined)
-        state = withStatus(state, `cancel session: queueCancel unavailable for ${cmd.agent}/${cmd.sessionId}`);
+        state = withStatus(
+          state,
+          `cancel session: queueCancel unavailable for ${cmd.agent}/${cmd.sessionId}`,
+        );
       else {
         try {
-          const { cursor } = await deps.api.queueCancel(cmd.agent!, `cancel session ${cmd.sessionId}`);
-          state = withStatus(state, `cancel queued for ${cmd.agent}/${cmd.sessionId} (cursor ${cursor})`);
+          const { cursor } = await deps.api.queueCancel(
+            cmd.agent!,
+            `cancel session ${cmd.sessionId}`,
+          );
+          state = withStatus(
+            state,
+            `cancel queued for ${cmd.agent}/${cmd.sessionId} (cursor ${cursor})`,
+          );
         } catch (e) {
-          state = withStatus(state, `cancel session: ${e instanceof Error ? e.message : e}`);
+          state = withStatus(
+            state,
+            `cancel session: ${e instanceof Error ? e.message : e}`,
+          );
         }
       }
       draw();
@@ -298,22 +329,36 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
         return showView("budgets");
       case "c":
         if (state.view === "inspector") {
-          const t = openTrace(buildInspector(state.selected, state.sessionEvents));
-          state = withStatus(state, t ? `⎙ trace_id: ${t.traceId} (copyable — open trace: trace ${t.traceId})` : "? trace_id: none yet");
+          const t = openTrace(
+            buildInspector(state.selected, state.sessionEvents),
+          );
+          state = withStatus(
+            state,
+            t
+              ? `⎙ trace_id: ${t.traceId} (copyable — open trace: trace ${t.traceId})`
+              : "? trace_id: none yet",
+          );
           draw();
         }
         return;
       case "t":
         if (state.view === "inspector") {
-          const t = openTrace(buildInspector(state.selected, state.sessionEvents));
-          state = withStatus(state, t ? `→ open trace: trace ${t.traceId}` : "? trace_id: none yet");
+          const t = openTrace(
+            buildInspector(state.selected, state.sessionEvents),
+          );
+          state = withStatus(
+            state,
+            t ? `→ open trace: trace ${t.traceId}` : "? trace_id: none yet",
+          );
           draw();
         }
         return;
       case "s":
       case "r":
         if (state.selected)
-          void runCommand(`${key.name === "s" ? "suspend" : "resume"} ${state.selected}`);
+          void runCommand(
+            `${key.name === "s" ? "suspend" : "resume"} ${state.selected}`,
+          );
         return;
     }
     if (key.sequence === ":" || key.sequence === "/") {

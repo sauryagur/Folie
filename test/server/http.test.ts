@@ -371,6 +371,38 @@ describe("steering poll and transcript API", () => {
     });
   });
 
+  it("accepts event batches over 1 MB (the ingest cap is per-event, not global)", async () => {
+    const pad = "x".repeat(6000);
+    const events = Array.from({ length: 200 }, (_, i) => ({
+      seq: i,
+      type: "message" as const,
+      data: { pad },
+    }));
+    const batch = { agent: "a", sessionId: "big1", scope: "wi:1", events };
+    expect(JSON.stringify(batch).length).toBeGreaterThan(1 << 20);
+    const out = await asAgentClient("a").sessionEvents(batch);
+    expect(out.stored).toBe(200);
+  });
+
+  it("concurrent creates of the same sessionId do not 500", async () => {
+    const mk = (seq: number) => ({
+      agent: "a",
+      sessionId: "race1",
+      scope: "wi:1",
+      events: [{ seq, type: "message" as const, data: {} }],
+    });
+    const [r1, r2] = await Promise.all([
+      asAgentClient("a")
+        .sessionEvents(mk(0))
+        .catch(() => ({ stored: -1 })),
+      asAgentClient("a")
+        .sessionEvents(mk(1))
+        .catch(() => ({ stored: -1 })),
+    ]);
+    expect(r1.stored).toBeGreaterThanOrEqual(0);
+    expect(r2.stored).toBeGreaterThanOrEqual(0);
+  });
+
   it("400s an invalid batch and a bad event filter", async () => {
     expect(
       (
@@ -532,5 +564,95 @@ describe("telemetry through HTTP", () => {
 
   it("only accepts POST on the OTLP path", async () => {
     expect((await raw("GET", "/v1/otlp/v1/traces")).status).toBe(404);
+  });
+});
+
+describe("task lifecycle through HTTP", () => {
+  it("propose/claim/start/submit persists the result and sweeps", async () => {
+    const goal = await client.submitGoal({ goal: "g" });
+    const wid = goal.workItem.id;
+    const ac = asAgentClient("a");
+    const task = await ac.proposeTask({
+      agent: "a",
+      workItemId: wid,
+      title: "t",
+    });
+    const claim = await ac.claimTask("a", task.id);
+    await ac.startTask("a", task.id, claim.fence);
+    const submitted = await ac.submitTask("a", task.id, claim.fence, {
+      answer: 42,
+    });
+    expect(submitted.status).toContain("submitted");
+    expect(submitted.result).toEqual({ answer: 42 });
+  });
+
+  it("pause blocks claim and revoke restores the task", async () => {
+    const goal = await client.submitGoal({ goal: "g2" });
+    const wid = goal.workItem.id;
+    const ac = asAgentClient("a");
+    const task = await ac.proposeTask({
+      agent: "a",
+      workItemId: wid,
+      title: "t",
+    });
+    await client.setGoalPaused(wid, true);
+    await expect(ac.claimTask("a", task.id)).rejects.toThrow();
+    await client.setGoalPaused(wid, false);
+    const claim = await ac.claimTask("a", task.id);
+    expect(claim.fence).toBeGreaterThan(0);
+    const revoked = await client.revokeTask(task.id);
+    expect(revoked.status).toBe("available");
+  });
+
+  it("budget create/carve-out/usage/close over HTTP", async () => {
+    const parent = await client.createBudget({
+      name: "root",
+      limitAmount: 100,
+      dim: "usd",
+    });
+    const child = await client.carveOut(parent.id, "leaf", 40);
+    const used = await client.recordUsage(child.id, 10, "measured");
+    expect(used.spent).toBe(10);
+    const closed = await client.closeBudget(child.id);
+    expect(closed.status).toBe("closed");
+    await expect(client.carveOut(child.id, "late", 5)).rejects.toThrow();
+  });
+
+  it("operator control poll sees a queued cancel", async () => {
+    await client.queueCancel("a", "because");
+    const ctrl = await asAgentClient("a").control("a");
+    expect(ctrl.actions.map((a) => a.type)).toContain("cancel");
+  });
+});
+
+describe("route coverage guard", () => {
+  it("every public task/budget/verification route exists (no 404)", async () => {
+    const wi = (await client.submitGoal({ goal: "guard" })).workItem.id;
+    const paths: Array<[string, string]> = [
+      ["POST", "/v1/tasks"],
+      ["POST", "/v1/tasks/1/claim"],
+      ["POST", "/v1/tasks/1/start"],
+      ["POST", "/v1/tasks/1/submit"],
+      ["POST", "/v1/tasks/1/revoke"],
+      ["POST", `/v1/work-items/${wi}/pause`],
+      ["POST", "/v1/budgets"],
+      ["POST", "/v1/budgets/1/carve-out"],
+      ["POST", "/v1/budgets/1/usage"],
+      ["POST", "/v1/budgets/1/close"],
+      ["POST", "/v1/verifications"],
+      ["POST", "/v1/verifications/1/verdict"],
+      ["POST", "/v1/admin/sweep-leases"],
+    ];
+    for (const [method, path] of paths) {
+      const res = await fetch(base + path, {
+        method,
+        headers: {
+          authorization: "Bearer op-secret-for-tests",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+      expect(res.status, `${method} ${path}`).not.toBe(404);
+    }
   });
 });

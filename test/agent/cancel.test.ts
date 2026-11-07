@@ -38,6 +38,7 @@ class FakeServer implements AgentServer {
       createdAt: "",
     };
   };
+  control = async () => ({ cursor: 0, actions: [] });
 }
 
 const quiet = captureSink();
@@ -53,7 +54,10 @@ const usage: SessionUsage = {
  * A runtime that stalls on a tool stub until the session's abort signal fires, then settles
  * failed with the cancel reason and the usage recorded before the cancel.
  */
-function stallRuntime(probe: { started: boolean; toolSawAbort: boolean }): Runtime {
+function stallRuntime(probe: {
+  started: boolean;
+  toolSawAbort: boolean;
+}): Runtime {
   return {
     run: (_messages, session) => {
       probe.started = true;

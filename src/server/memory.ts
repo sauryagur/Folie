@@ -6,17 +6,10 @@ import { createHash } from "node:crypto";
 
 export type MemoryScope = "agent" | "team" | "goal" | "swarm";
 export type MemoryKind =
-  | "semantic"
-  | "episodic"
-  | "procedural"
-  | "claim"
-  | "handoff";
+  "semantic" | "episodic" | "procedural" | "claim" | "handoff";
 export type MemoryStatus = "active" | "contested" | "superseded";
 export type MemoryLinkKind =
-  | "contradicts"
-  | "corroborates"
-  | "supersedes"
-  | "derived_from";
+  "contradicts" | "corroborates" | "supersedes" | "derived_from";
 
 export interface MemoryLink {
   id: number;

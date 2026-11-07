@@ -311,5 +311,7 @@ export class Controller implements AgentOps {
       });
     }
     await this.agents.setState(name, "retired");
+    if (this.auth)
+      await this.auth.revokeAgentTokens(name).catch(() => undefined);
   }
 }

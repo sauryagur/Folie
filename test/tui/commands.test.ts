@@ -89,8 +89,16 @@ describe("parseCommand", () => {
   );
 
   it("cancel targets an agent with an optional reason", () => {
-    expect(parse("cancel bob stop that")).toEqual({ kind: "cancel", agent: "bob", reason: "stop that" });
-    expect(parse("cancel")).toEqual({ kind: "cancel", agent: "agent-1", reason: "cancelled from TUI" });
+    expect(parse("cancel bob stop that")).toEqual({
+      kind: "cancel",
+      agent: "bob",
+      reason: "stop that",
+    });
+    expect(parse("cancel")).toEqual({
+      kind: "cancel",
+      agent: "agent-1",
+      reason: "cancelled from TUI",
+    });
     expect(parse("cancel", null)).toMatchObject({ kind: "error" });
   });
 
@@ -226,9 +234,9 @@ describe("execute", () => {
 
   it("cancel calls queueCancel", async () => {
     const { api, calls } = fakeApi();
-    expect(await execute({ kind: "cancel", agent: "a", reason: "why" }, api)).toBe(
-      "cancel queued for a (cursor 7)",
-    );
+    expect(
+      await execute({ kind: "cancel", agent: "a", reason: "why" }, api),
+    ).toBe("cancel queued for a (cursor 7)");
     expect(calls).toEqual(["cancel a why"]);
   });
 });

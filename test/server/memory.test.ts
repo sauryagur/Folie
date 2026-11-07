@@ -60,27 +60,41 @@ describe("scoped ACL", () => {
     ).toEqual([aOwn]);
     // Goal participant sees goal entry; non-participant does not.
     expect(
-      (await store.memories.query({}, { name: "a", goals: ["g1"] })).map((e) => e.id),
+      (await store.memories.query({}, { name: "a", goals: ["g1"] })).map(
+        (e) => e.id,
+      ),
     ).toEqual(expect.arrayContaining([aOwn, goalEntry]));
     expect(
-      (await store.memories.query({}, { name: "c", goals: ["g2"] })).map((e) => e.id),
+      (await store.memories.query({}, { name: "c", goals: ["g2"] })).map(
+        (e) => e.id,
+      ),
     ).toEqual([]);
     // Team member sees team entry; outsider does not.
     expect(
-      (await store.memories.query({}, { name: "c", teams: ["t1"] })).map((e) => e.id),
+      (await store.memories.query({}, { name: "c", teams: ["t1"] })).map(
+        (e) => e.id,
+      ),
     ).toEqual([teamEntry]);
     expect(
-      (await store.memories.query({}, { name: "c", teams: ["t2"] })).map((e) => e.id),
+      (await store.memories.query({}, { name: "c", teams: ["t2"] })).map(
+        (e) => e.id,
+      ),
     ).toEqual([]);
     // Swarm needs the grant.
     expect(
       (await store.memories.query({}, { name: "c" })).map((e) => e.id),
     ).toEqual([]);
     expect(
-      (await store.memories.query({}, { name: "c", swarm: true })).map((e) => e.id),
+      (await store.memories.query({}, { name: "c", swarm: true })).map(
+        (e) => e.id,
+      ),
     ).toEqual([swarmEntry]);
     // Operator sees all.
-    expect((await store.memories.query({}, { name: "op", kind: "operator" })).map((e) => e.id)).toEqual(
+    expect(
+      (await store.memories.query({}, { name: "op", kind: "operator" })).map(
+        (e) => e.id,
+      ),
+    ).toEqual(
       expect.arrayContaining([aOwn, bOwn, goalEntry, teamEntry, swarmEntry]),
     );
     // Scoped filter cannot widen past the ACL.
@@ -159,9 +173,7 @@ describe("contradictions", () => {
       { scope: "goal", scopeId: "g1" },
       { name: "a", goals: ["g1"] },
     );
-    expect(after.map((e) => e.id)).toEqual(
-      expect.arrayContaining([a, b, r]),
-    );
+    expect(after.map((e) => e.id)).toEqual(expect.arrayContaining([a, b, r]));
     expect(after.find((e) => e.id === a)!.status).toBe("superseded");
     expect(after.find((e) => e.id === a)!.supersededBy).toBe(r);
     expect(after.find((e) => e.id === b)!.status).toBe("contested");
@@ -223,9 +235,10 @@ describe("artifacts", () => {
     expect(put.ref).toBe(artifactRef(put.sha256));
     expect(put.bytes).toBe(bytes.length);
     // Same bytes, same ref (idempotent put).
-    expect(
-      await store.artifacts.put({ bytes, producer: "a" }),
-    ).toMatchObject({ sha256: put.sha256, ref: put.ref });
+    expect(await store.artifacts.put({ bytes, producer: "a" })).toMatchObject({
+      sha256: put.sha256,
+      ref: put.ref,
+    });
 
     // Retire-then-fetch: termination + retirement + even agent row deletion.
     store.registry.record({
@@ -260,10 +273,7 @@ describe("memory_write default scope", () => {
       content: "default scoped",
       createdBy: "a",
     });
-    const [row] = await store.memories.query(
-      {},
-      { name: "a", goals: ["g1"] },
-    );
+    const [row] = await store.memories.query({}, { name: "a", goals: ["g1"] });
     expect(row!.id).toBe(id);
     expect(row!.scope).toBe("goal");
   });

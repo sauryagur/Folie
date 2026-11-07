@@ -40,20 +40,19 @@ async function ensureOperatorTokenSecret(): Promise<void> {
     token = (await Bun.file(file).text()).trim();
   }
   // Never replace an existing Secret if Postgres already initialized? For operator token we upsert; rotation is explicit.
-  const yaml = await capture(
-    kubectl(
-      "-n",
-      NS,
-      "create",
-      "secret",
-      "generic",
-      "folie-operator-token",
-      "--dry-run=client",
-      "-o",
-      "yaml",
-      `--from-literal=token=${token}`,
-    ),
-  );
+  // Token never appears in argv (visible to `ps` on a shared host): build the Secret and pipe it to kubectl.
+  const b64 = Buffer.from(token, "utf8").toString("base64");
+  const yaml = [
+    "apiVersion: v1",
+    "kind: Secret",
+    "metadata:",
+    "  name: folie-operator-token",
+    `  namespace: ${NS}`,
+    "type: Opaque",
+    "data:",
+    `  token: ${b64}`,
+    "",
+  ].join("\n");
   await must(kubectl("apply", "-f", "-"), { stdin: yaml, quiet: true });
 }
 

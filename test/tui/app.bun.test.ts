@@ -50,10 +50,18 @@ describe.skipIf(!process.versions.bun)("TUI app", () => {
     topics: async () => [{ topic: "news", subscribers: ["agent-1"] }],
     inbox: async (a) => (calls.push(`inbox ${a}`), []),
     reports: async (q) => (calls.push(`reports ${q?.agent}`), []),
+    stream: async () => [],
+    listBudgets: async () => [],
     submitGoal: async (r) => (
       calls.push(`submit ${r.to ?? "-"} ${r.goal}`),
       {
-        workItem: { id: 9, goal: r.goal, state: "queued", paused: false, createdAt: "" },
+        workItem: {
+          id: 9,
+          goal: r.goal,
+          state: "queued",
+          paused: false,
+          createdAt: "",
+        },
         message: null,
       }
     ),

@@ -201,7 +201,10 @@ describe("verification contracts", () => {
       { agent: "a", workItemId: workItem.id, title: "sub2", spec: {} },
       asAgent("a"),
     );
-    const c2 = await service.claimTask({ agent: "a", taskId: t2.id }, asAgent("a"));
+    const c2 = await service.claimTask(
+      { agent: "a", taskId: t2.id },
+      asAgent("a"),
+    );
     await service.startTask(
       { agent: "a", taskId: t2.id, fence: c2.fence },
       asAgent("a"),

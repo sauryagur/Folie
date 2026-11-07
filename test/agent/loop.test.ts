@@ -65,6 +65,10 @@ class FakeServer implements AgentServer {
       createdAt: "",
     };
   };
+  control = async (_agent: string, _after?: number) => ({
+    cursor: 0,
+    actions: [],
+  });
 }
 
 const done: Runtime = { run: async () => ({ outcome: "done", summary: "s" }) };

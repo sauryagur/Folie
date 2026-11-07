@@ -43,7 +43,10 @@ export async function formTeam(
   }
   if (!b.scopeId) throw new ValidationError("scopeId: non-empty required");
   if (!b.convener) throw new ValidationError("convener: non-empty required");
-  if (b.budgetAsk !== undefined && (!Number.isFinite(b.budgetAsk) || b.budgetAsk <= 0)) {
+  if (
+    b.budgetAsk !== undefined &&
+    (!Number.isFinite(b.budgetAsk) || b.budgetAsk <= 0)
+  ) {
     throw new ValidationError("budgetAsk: positive number required");
   }
   const dupe = await store.teams.getByName(name);
@@ -51,7 +54,10 @@ export async function formTeam(
 
   // Per-scope cap: contracts-only enforcement via list scan.
   const scoped = (await store.teams.list()).filter(
-    (t) => t.scopeKind === b.scopeKind && t.scopeId === b.scopeId && t.status !== "dissolved",
+    (t) =>
+      t.scopeKind === b.scopeKind &&
+      t.scopeId === b.scopeId &&
+      t.status !== "dissolved",
   );
   if (scoped.length >= MAX_TEAMS_PER_GOAL) {
     throw new ValidationError("quota_exceeded: max_teams per scope");
@@ -61,9 +67,19 @@ export async function formTeam(
   // If budgetId already names the slice, attach it; if budgetAsk given, carve from scope budget.
   let budgetId = b.budgetId;
   if (b.budgetAsk !== undefined) {
-    if (!b.budgetId) throw new ValidationError("budgetId: scope budget required for carve-out");
-    const child = await store.budgets.carveOut(b.budgetId, `team:${name}`, b.budgetAsk);
-    if (!child) throw new ValidationError("insufficient_budget: scope headroom cannot cover team slice");
+    if (!b.budgetId)
+      throw new ValidationError(
+        "budgetId: scope budget required for carve-out",
+      );
+    const child = await store.budgets.carveOut(
+      b.budgetId,
+      `team:${name}`,
+      b.budgetAsk,
+    );
+    if (!child)
+      throw new ValidationError(
+        "insufficient_budget: scope headroom cannot cover team slice",
+      );
     budgetId = child.id;
   }
 
@@ -96,7 +112,9 @@ export async function joinTeam(
     if (members.length >= MAX_TEAM_SIZE) {
       throw new ValidationError("quota_exceeded: max_team_size");
     }
-    const all = (await store.teams.list()).filter((t) => t.status !== "dissolved");
+    const all = (await store.teams.list()).filter(
+      (t) => t.status !== "dissolved",
+    );
     let memberships = 0;
     for (const t of all) {
       const ms = await store.teams.members(t.id);
@@ -125,7 +143,10 @@ export async function setResponsibility(
   await store.teams.setResponsibility(teamId, agent, responsibilities);
 }
 
-export async function activateTeam(store: Store, teamId: number): Promise<TeamRecord> {
+export async function activateTeam(
+  store: Store,
+  teamId: number,
+): Promise<TeamRecord> {
   const team = await store.teams.get(teamId);
   if (!team) throw new ValidationError(`teamId: unknown ${teamId}`);
   assertTransition(team.status, "active");
@@ -138,7 +159,10 @@ export async function activateTeam(store: Store, teamId: number): Promise<TeamRe
   return out;
 }
 
-export async function dissolveTeam(store: Store, teamId: number): Promise<TeamRecord> {
+export async function dissolveTeam(
+  store: Store,
+  teamId: number,
+): Promise<TeamRecord> {
   const team = await store.teams.get(teamId);
   if (!team) throw new ValidationError(`teamId: unknown ${teamId}`);
   assertTransition(team.status, "dissolving");
@@ -160,7 +184,8 @@ export async function addTeamNote(
   teamId: number,
   createdBy: string,
   content: string,
-  kind: "semantic" | "episodic" | "procedural" | "claim" | "handoff" = "semantic",
+  kind:
+    "semantic" | "episodic" | "procedural" | "claim" | "handoff" = "semantic",
 ): Promise<number> {
   const team = await store.teams.get(teamId);
   if (!team) throw new ValidationError(`teamId: unknown ${teamId}`);
@@ -195,13 +220,20 @@ export interface DiscoveryCandidate {
 }
 
 export function scoreCandidate(c: DiscoveryCandidate): number {
-  return c.capabilityLevel * 10 + c.affinity * 5 + (c.warmed ? 3 : 0) - c.load * 2;
+  return (
+    c.capabilityLevel * 10 + c.affinity * 5 + (c.warmed ? 3 : 0) - c.load * 2
+  );
 }
 
 /** Push: top-K ranked eligible agents; never broadcast. Pull is the indexed query below. */
-export function nominate(candidates: DiscoveryCandidate[], k: number): string[] {
-  const ranked = [...candidates]
-    .sort((a, b) => scoreCandidate(b) - scoreCandidate(a) || a.agent.localeCompare(b.agent));
+export function nominate(
+  candidates: DiscoveryCandidate[],
+  k: number,
+): string[] {
+  const ranked = [...candidates].sort(
+    (a, b) =>
+      scoreCandidate(b) - scoreCandidate(a) || a.agent.localeCompare(b.agent),
+  );
   return ranked.slice(0, Math.max(0, k)).map((c) => c.agent);
 }
 
@@ -221,7 +253,7 @@ export async function discoverTasks(
 export type EscalationLevel = 0 | 1 | 2 | 3; // 0 in-task, 1 goal owner, 2 reviewer, 3 human
 
 export function nextEscalation(level: EscalationLevel): EscalationLevel | null {
-  return level >= 3 ? null : (level + 1) as EscalationLevel;
+  return level >= 3 ? null : ((level + 1) as EscalationLevel);
 }
 
 export async function recordDissent(
@@ -248,7 +280,12 @@ export interface QuotaCounters {
   proposalsLastHour: number;
 }
 
-export const DEFAULT_QUOTAS: { maxDepth: number; maxFanOut: number; maxWip: number; maxProposalsPerHour: number } = {
+export const DEFAULT_QUOTAS: {
+  maxDepth: number;
+  maxFanOut: number;
+  maxWip: number;
+  maxProposalsPerHour: number;
+} = {
   maxDepth: 4,
   maxFanOut: 8,
   maxWip: 32,
@@ -257,11 +294,17 @@ export const DEFAULT_QUOTAS: { maxDepth: number; maxFanOut: number; maxWip: numb
 
 export function checkQuota(
   c: QuotaCounters,
-  limits: { maxDepth: number; maxFanOut: number; maxWip: number; maxProposalsPerHour: number } = DEFAULT_QUOTAS,
+  limits: {
+    maxDepth: number;
+    maxFanOut: number;
+    maxWip: number;
+    maxProposalsPerHour: number;
+  } = DEFAULT_QUOTAS,
 ): string | null {
   if (c.depth > limits.maxDepth) return "depth";
   if (c.fanOut >= limits.maxFanOut) return "fan-out";
   if (c.wip >= limits.maxWip) return "wip";
-  if (c.proposalsLastHour >= limits.maxProposalsPerHour) return "proposals/hour";
+  if (c.proposalsLastHour >= limits.maxProposalsPerHour)
+    return "proposals/hour";
   return null;
 }

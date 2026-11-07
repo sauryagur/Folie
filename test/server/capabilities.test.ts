@@ -32,9 +32,21 @@ describe("capability levels", () => {
     await defineCapability(store, { name: "code", riskClass: "R0" });
     const d = await declareCapability(store, "alice", "code");
     expect(d.level).toBe("declared");
-    const a = await assessCapability(store, "alice", "code", { score: 9 }, "verifier");
+    const a = await assessCapability(
+      store,
+      "alice",
+      "code",
+      { score: 9 },
+      "verifier",
+    );
     expect(a.level).toBe("assessed");
-    const v = await verifyCapability(store, "alice", "code", { passes: 5 }, "verifier");
+    const v = await verifyCapability(
+      store,
+      "alice",
+      "code",
+      { passes: 5 },
+      "verifier",
+    );
     expect(v.level).toBe("verified");
     expect(await levelFor(store, "alice", "code")).toBe("verified");
   });

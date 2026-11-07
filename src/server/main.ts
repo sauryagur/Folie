@@ -37,7 +37,11 @@ const controller = new Controller(
   store.auth,
 );
 // Leader-only loops: the lease outlives one tick (3x the interval), each tick renews it.
-const leader = new LeaderElection(db, `folie-server-${randomUUID()}`, cfg.reconcileMs * 3);
+const leader = new LeaderElection(
+  db,
+  `folie-server-${randomUUID()}`,
+  cfg.reconcileMs * 3,
+);
 let reconciling = false;
 const timer = setInterval(async () => {
   if (reconciling) return;
@@ -48,6 +52,7 @@ const timer = setInterval(async () => {
       // Dispatch first so goals assigned this pass wake their agents in the same pass.
       await service.dispatchQueued(cfg.maxAgents);
       await controller.reconcileOnce();
+      await service.sweepLeases(100, { kind: "operator", name: "operator" });
     }
   } catch (e) {
     console.error("controller: reconcile failed:", e);

@@ -46,24 +46,23 @@ describe("EventSink", () => {
     expect(got.map((e) => e.seq)).toEqual([0, 1]);
   });
 
-  it("gives up on a batch after repeated failures so one bad batch cannot block the log forever", async () => {
+  it("keeps a failed batch queued and delivers it on a later flush", async () => {
     let rejected = 0;
     const got: SessionEventInput[] = [];
     const { sink: s } = sink(async (e) => {
-      if (e[0]!.seq === 0 && rejected < 99) {
+      if (e[0]!.seq === 0 && rejected < 3) {
         rejected++;
-        throw new Error("400 invalid");
+        throw new Error("server down");
       }
       got.push(...e);
     });
     s.emit("message", {});
     await s.flush();
     await s.flush();
-    await s.flush(); // third failure: dropped
-    s.emit("message", {});
     await s.flush();
-
-    expect(got.map((e) => e.seq)).toEqual([1]);
+    expect(got).toEqual([]);
+    await s.flush();
+    expect(got.map((e) => e.seq)).toEqual([0]);
   });
 
   it("clips an event over the size limit instead of sending something the server would reject", async () => {
