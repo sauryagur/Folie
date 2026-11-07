@@ -724,7 +724,7 @@ const registry = (q: Queryable): ExecutionRegistryRepo => ({
     );
   },
 });
-const TASK_COLS = "id, work_item_id, title, spec, status, fence, owner";
+const TASK_COLS = "id, work_item_id, title, spec, status, fence, owner, created_at, claimed_at, submitted_at, verified_at";
 const toTask = (r: Row) => ({
   id: r.id as number,
   workItemId: r.work_item_id as number,
@@ -736,6 +736,10 @@ const toTask = (r: Row) => ({
     string,
     unknown
   >,
+  createdAt: iso(r.created_at),
+  claimedAt: r.claimed_at ? iso(r.claimed_at) : null,
+  submittedAt: r.submitted_at ? iso(r.submitted_at) : null,
+  verifiedAt: r.verified_at ? iso(r.verified_at) : null,
 });
 const tasks = (q: Queryable): TaskRepo => ({
   async propose({ workItemId, title, spec }) {
@@ -755,7 +759,7 @@ const tasks = (q: Queryable): TaskRepo => ({
   async claim(taskId, agent, leaseMs) {
     const leaseSec = `${Math.max(1, Math.round(leaseMs / 1000))} seconds`;
     const { rows } = await q.query(
-      `UPDATE tasks SET status='claimed', fence = fence + 1, owner=$2, lease_expires_at = now() + ($3::text)::interval
+      `UPDATE tasks SET status='claimed', claimed_at=now(), fence = fence + 1, owner=$2, lease_expires_at = now() + ($3::text)::interval
        WHERE id=$1 AND status='available' RETURNING ${TASK_COLS}`,
       [taskId, agent, leaseSec],
     );
@@ -776,7 +780,7 @@ const tasks = (q: Queryable): TaskRepo => ({
   },
   async submit(taskId, fence, _result) {
     const { rows } = await q.query(
-      `UPDATE tasks SET status='submitted' WHERE id=$1 AND status='running' AND fence=$2 RETURNING ${TASK_COLS}`,
+      `UPDATE tasks SET status='submitted', submitted_at=now() WHERE id=$1 AND status='running' AND fence=$2 RETURNING ${TASK_COLS}`,
       [taskId, fence],
     );
     if (!rows[0]) return null;
@@ -788,7 +792,7 @@ const tasks = (q: Queryable): TaskRepo => ({
   },
   async setVerified(taskId) {
     const { rows } = await q.query(
-      `UPDATE tasks SET status='verified' WHERE id=$1 AND status='submitted' RETURNING ${TASK_COLS}`,
+      `UPDATE tasks SET status='verified', verified_at=now() WHERE id=$1 AND status='submitted' RETURNING ${TASK_COLS}`,
       [taskId],
     );
     return rows[0] ? toTask(rows[0]) : null;

@@ -169,6 +169,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   fence       bigint NOT NULL DEFAULT 0,
   owner       text REFERENCES agents(name),
   lease_expires_at timestamptz,
+  claimed_at  timestamptz,
+  submitted_at timestamptz,
+  verified_at timestamptz,
   attempt     int NOT NULL DEFAULT 0,
   created_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -210,6 +213,9 @@ CREATE TABLE IF NOT EXISTS goal_evaluations (
 );
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS session_id int REFERENCES sessions(id);
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS leased_at timestamptz;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS claimed_at timestamptz;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS submitted_at timestamptz;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS verified_at timestamptz;
 CREATE INDEX IF NOT EXISTS messages_leased ON messages (session_id) WHERE session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS messages_unleased ON messages (recipient, id) WHERE acked_at IS NULL AND session_id IS NULL;
 -- Scoped memory (ADR 0008, R-4.1/4.2): immutable entries; ACL is enforced inside

@@ -106,6 +106,10 @@ export interface TaskRecord {
   fence: number;
   owner: string | null;
   spec: Record<string, unknown>;
+  createdAt: string;
+  claimedAt: string | null;
+  submittedAt: string | null;
+  verifiedAt: string | null;
 }
 export interface ProposeTaskRequest {
   agent: string;

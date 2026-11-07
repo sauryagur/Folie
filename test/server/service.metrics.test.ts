@@ -51,6 +51,7 @@ describe("semantic metrics catalog", () => {
     expect(m["folie.task.transition{from=claimed,to=running}"]).toBe(1);
     expect(m["folie.task.transition{from=running,to=submitted}"]).toBe(1);
     expect(m["folie.proposal{outcome=accepted}"]).toBe(1);
+    expect(m["folie.task.claim.latency{}"]).toBe(1);
     for (const k of Object.keys(m)) {
       expect(k).not.toContain("task_id");
       expect(k).not.toContain("goal_id");
@@ -107,6 +108,7 @@ describe("semantic metrics catalog", () => {
     expect(ev.verdict).toBe("achieved");
     expect(m["folie.goal.outcome{outcome=achieved}"]).toBe(1);
     expect(m["folie.task.verified{}"]).toBe(1);
+    expect(m["folie.task.time_to_verified{}"]).toBe(1);
     expect(m["folie.budget.exhausted{dim=usd}"]).toBe(1);
     expect(m["folie.budget.overrun{dim=usd}"]).toBe(1);
     expect(m["folie.llm.cost{cost_basis=estimated}"]).toBe(25);

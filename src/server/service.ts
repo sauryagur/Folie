@@ -707,6 +707,10 @@ export class SwarmService {
       return claimed;
     });
     this.obs.metrics.taskTransition({ from: "available", to: "claimed" });
+    if (out.task.createdAt && out.task.claimedAt) {
+      const ms = Date.parse(out.task.claimedAt) - Date.parse(out.task.createdAt);
+      if (Number.isFinite(ms) && ms >= 0) this.obs.metrics.taskClaimLatency({ ms });
+    }
     return {
       taskId: out.task.id,
       agent,
@@ -907,7 +911,13 @@ export class SwarmService {
       return { decided, verified };
     });
     this.obs.metrics.verificationResult({ kind: "contract", result: req.verdict });
-    if (verified) this.obs.metrics.taskVerified();
+    if (verified) {
+      this.obs.metrics.taskVerified();
+      if (verified.claimedAt && verified.verifiedAt) {
+        const ms = Date.parse(verified.verifiedAt) - Date.parse(verified.claimedAt);
+        if (Number.isFinite(ms) && ms >= 0) this.obs.metrics.taskTimeToVerified({ ms });
+      }
+    }
     return decided;
   }
 

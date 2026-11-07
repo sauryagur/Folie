@@ -59,6 +59,10 @@ export interface Metrics {
   llmCost(e: { amount: number; basis: string }): void;
   /** One submitted task that moved to verified after all required checks passed. */
   taskVerified(): void;
+  /** Available->claimed latency for one claim. */
+  taskClaimLatency(e: { ms: number }): void;
+  /** Claimed->verified latency for one verified task. */
+  taskTimeToVerified(e: { ms: number }): void;
 }
 
 export interface Observability {
@@ -81,6 +85,8 @@ export const noopMetrics: Metrics = {
   goalEvaluated() {},
   llmCost() {},
   taskVerified() {},
+  taskClaimLatency() {},
+  taskTimeToVerified() {},
 };
 export const noopObservability = (): Observability => ({
   tracer: trace.getTracer(TRACER_NAME),
@@ -169,6 +175,14 @@ export function createTelemetry(opts: TelemetryOptions): Telemetry {
   const taskVerified = meter.createCounter("folie.task.verified", {
     description: "Tasks that moved submitted -> verified",
   });
+  const claimLatency = meter.createHistogram("folie.task.claim.latency", {
+    description: "Time from available to claimed",
+    unit: "ms",
+  });
+  const timeToVerified = meter.createHistogram("folie.task.time_to_verified", {
+    description: "Time from claimed to verified",
+    unit: "ms",
+  });
   const deliveryLatency = meter.createHistogram("folie.message.delivery.latency", {
     description: "Time from message creation to lease",
     unit: "ms",
@@ -252,6 +266,12 @@ export function createTelemetry(opts: TelemetryOptions): Telemetry {
     },
     taskVerified() {
       taskVerified.add(1);
+    },
+    taskClaimLatency({ ms }) {
+      claimLatency.record(ms);
+    },
+    taskTimeToVerified({ ms }) {
+      timeToVerified.record(ms);
     },
   };
 
