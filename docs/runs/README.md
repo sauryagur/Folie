@@ -38,3 +38,13 @@ goal:
   verified coverage, not from prose).
 - Do not mark an E-demonstration met until its required config fields are
   present and the ledger shows the acceptance path end to end.
+
+## Starting a run
+
+1. `folie up` (live cluster), seed the goal/budget, run the scenario.
+2. `./docs/runs/capture.sh E<N>` — writes `config.yaml` (git SHA prefilled) and
+   `ledger.jsonl` (event stream dump) into `docs/runs/<date>-e<N>/`.
+3. Fill the `<fill ...>` fields in `config.yaml` and the `notes.md` template.
+4. Commit the directory. No directory committed, no claim.
+
+Ready-to-copy templates live in `docs/runs/_template-e{1..6}/`.

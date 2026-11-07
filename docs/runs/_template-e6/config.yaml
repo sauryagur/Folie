@@ -1,0 +1,12 @@
+run: 2026-11-08-e1
+demo: E1
+git_sha: <commit>
+server_image: <FOLIE_SERVER_IMAGE>
+agent_image: <FOLIE_AGENT_IMAGE>
+substrate: <ax/substrate versions or commit>
+model_provider: <provider/model>
+seed_agents: 2
+budget: { dim: usd, limit: 0 }
+goal:
+  acceptance: <criteria text or hash>
+  held_out: <goal id>
