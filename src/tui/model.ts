@@ -47,8 +47,12 @@ export interface TuiState {
   alertSignals: AlertSignal[];
   /** Budget carve-outs feeding the budgets tree (view "budgets"); empty until a feed supplies them. */
   budgets: BudgetNodeInput[];
-  /** Result of the last command, or the last poll failure. */
+  /** Result of the last command. Persistent errors live in `error` and never flicker out. */
   status: string;
+  /** Last poll failure, until the next successful poll. */
+  error: string | null;
+  /** True once any poll has completed (success or failure). */
+  polled: boolean;
   connected: boolean;
 }
 
@@ -65,6 +69,8 @@ export const initialState = (): TuiState => ({
   alertSignals: [],
   budgets: [],
   status: "connecting…",
+  error: null,
+  polled: false,
   connected: false,
 });
 
@@ -355,6 +361,8 @@ export function applyPoll(s: TuiState, p: PollResult): TuiState {
     alertSignals: p.alertSignals ?? s.alertSignals,
     budgets: p.budgets ?? s.budgets,
     connected: true,
+    polled: true,
+    error: null,
     status: s.connected ? s.status : "connected",
   };
 }
@@ -362,7 +370,10 @@ export function applyPoll(s: TuiState, p: PollResult): TuiState {
 export const pollFailed = (s: TuiState, error: unknown): TuiState => ({
   ...s,
   connected: false,
-  status: `server unreachable: ${error instanceof Error ? error.message : String(error)}`,
+  polled: true,
+  error: /unable to connect|fetch failed|ECONNREFUSED|network/i.test(error instanceof Error ? error.message : String(error))
+    ? "server unreachable — is folie up? (`folie up`, or check FOLIE_SERVER_URL)"
+    : `server error: ${error instanceof Error ? error.message : String(error)}`,
 });
 
 export const withStatus = (s: TuiState, status: string): TuiState => ({

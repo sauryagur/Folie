@@ -12,6 +12,7 @@ import {
   moveSelection,
   paneLines,
   pollFailed,
+  withStatus,
   select,
   type PollResult,
 } from "../../src/tui/model";
@@ -147,7 +148,8 @@ describe("pollFailed", () => {
     const down = pollFailed(up, new Error("ECONNREFUSED"));
     expect(down).toMatchObject({
       connected: false,
-      status: "server unreachable: ECONNREFUSED",
+      polled: true,
+      error: expect.stringMatching(/folie up/),
     });
     expect(down.agents).toHaveLength(1);
     expect(down.stream).toHaveLength(1);
@@ -156,6 +158,17 @@ describe("pollFailed", () => {
   it("reconnecting restores the status line", () => {
     const down = pollFailed(initialState(), "boom");
     expect(applyPoll(down, poll()).status).toBe("connected");
+  });
+
+  it("persistent error survives transient status and clears on a good poll", () => {
+    const down = pollFailed(initialState(), new Error("boom"));
+    expect(down.error).toMatch(/server error/);
+    const noted = withStatus(down, "message #5 sent");
+    expect(noted.error).toBe(down.error);
+    expect(noted.status).toBe("message #5 sent");
+    const up = applyPoll(noted, poll());
+    expect(up.error).toBeNull();
+    expect(up.connected).toBe(true);
   });
 });
 

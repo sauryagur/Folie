@@ -132,6 +132,7 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
     height: 1,
     flexShrink: 0,
     fg: COLORS.dim,
+    wrapMode: "word",
   });
   const input = new InputRenderable(renderer, {
     placeholder: "type a command (help), or just: submit <goal>",
@@ -153,10 +154,18 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
   fleet.focus();
 
   function draw() {
-    const views = VIEWS.map((v, i) =>
-      v === state.view ? `[${i + 1}:${v}]` : ` ${i + 1}:${v} `,
-    ).join(" ");
-    header.content = `${views} ✗ ${alertBadge(state.alertSignals)} ${state.connected ? "● connected" : "○ offline"}`;
+    const narrow = (renderer.width ?? 0) < 96;
+    const views = narrow
+      ? VIEWS.map((v, i) => (v === state.view ? `[${i + 1}:${v[0]}]` : `${i + 1}:${v[0]}`)).join(" ")
+      : VIEWS.map((v, i) =>
+          v === state.view ? `[${i + 1}:${v}]` : ` ${i + 1}:${v} `,
+        ).join(" ");
+    const conn = !state.polled ? "… connecting" : state.connected ? "● connected" : "○ offline";
+    const alertText = state.connected ? alertBadge(state.alertSignals) : "alerts —";
+    const glyph = state.connected && state.alertSignals.length > 0 ? `✗ ${alertText}` : alertText;
+    header.content = `${views} ${glyph} ${conn}`;
+
+    fleetBox.width = narrow ? 28 : 40;
 
     const rows = fleetRows(state.agents, now());
     fleetHeader.content = fleetHeaderText(state.agents);
@@ -172,8 +181,21 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
 
     paneBox.title = paneTitle(state);
     pane.content = paneLines(state).join("\n");
-    status.content = ` ${state.status}`;
-    status.fg = state.connected ? COLORS.dim : COLORS.bad;
+    const shown = state.error ?? state.status;
+    const idle = !state.error && state.status === "connected";
+    const text = idle ? "Tab view · : cmd · q quit" : shown;
+    const width = Math.max(40, (renderer.width ?? 110) - 2);
+    const words = text.split(/\s+/);
+    const lines: string[] = [];
+    let line = "";
+    for (const w of words) {
+      if ((line + " " + w).trim().length > width && line) { lines.push(line); line = w; }
+      else line = line ? `${line} ${w}` : w;
+    }
+    if (line) lines.push(line);
+    status.height = Math.min(3, Math.max(1, lines.length));
+    status.content = ` ${lines.join("\n ")}`;
+    status.fg = state.error ? COLORS.bad : state.connected ? COLORS.dim : COLORS.bad;
   }
 
   let inFlight = false;
