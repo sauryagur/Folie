@@ -1,6 +1,6 @@
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY bin/folie-server /usr/local/bin/folie-server
-COPY proto/*.proto /etc/folie/proto/
+COPY proto/ /etc/folie/proto/
 ENV FOLIE_PROTO_DIR=/etc/folie/proto
 ENTRYPOINT ["/usr/local/bin/folie-server"]

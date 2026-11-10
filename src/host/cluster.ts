@@ -17,6 +17,7 @@ import {
   BIN,
   capture,
 } from "./env";
+import { checkAxPin } from "./ax-pin";
 import { buildImages } from "./images";
 import { renderManifest } from "./manifest";
 import { grantFolieServerSubstrateAccess } from "./substrate-authz";
@@ -184,6 +185,9 @@ async function deployServer() {
 
 export async function up() {
   for (const t of ALL_TOOLS) await ensureTool(t);
+
+  const pinWarning = await checkAxPin(AX_DIR);
+  if (pinWarning) console.warn(`==> warning: ${pinWarning}`);
 
   // Re-running must not wipe ax's DB (the setup script does), so skip it when ax is already healthy.
   if (await axHealthy())

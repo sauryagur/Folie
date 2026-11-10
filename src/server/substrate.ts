@@ -3,7 +3,7 @@
 // grants one before an agent first runs. Full trust is the design: every host, on the web ports.
 import * as grpc from "@grpc/grpc-js";
 import { readFileSync } from "node:fs";
-import { callUnary, isGrpcStatus, loadService } from "./grpc";
+import { SUBSTRATE_PROTO, callUnary, isGrpcStatus, loadService } from "./grpc";
 import { type EgressPolicyOptions, type WebPorts } from "./config";
 import { DEFAULT_WEB_PORTS } from "./config";
 export { DEFAULT_WEB_PORTS };
@@ -31,7 +31,12 @@ export function allowAllWebPolicy(atespace: string, ports: WebPorts) {
 }
 
 export function grpcEgressPolicies(opts: EgressPolicyOptions): EgressPolicies {
-  const Control = loadService("ateapi.proto", ["ateapi", "Control"]);
+  const Control = loadService(SUBSTRATE_PROTO, [
+    "substrate",
+    "ateapi",
+    "v1",
+    "Control",
+  ]);
   const callCreds = grpc.credentials.createFromMetadataGenerator(
     (_params, cb) => {
       try {
