@@ -1,0 +1,255 @@
+// Configuration system for Folie.
+// Replaces environment variables with a YAML config file at ~/.config/folie/config.yaml
+// Env vars still override config for CI/CD compatibility.
+
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { randomBytes } from "node:crypto";
+
+export const CONFIG_VERSION = 1;
+export const CONFIG_DIR_NAME = "folie";
+export const CONFIG_FILE_NAME = "config.yaml";
+
+export interface AgentEnvEntry {
+  key: string;
+  value: string;
+}
+
+export interface FolieConfig {
+  config_version: number;
+  kubeconfig_context: string;
+  operator_token: string;
+  agent_image: string;
+  default_model: string;
+  model_api_key: string;
+  atespace: string;
+  agent_runtime: "pi" | "echo";
+  agent_env: AgentEnvEntry[];
+  server_port: number;
+  reconcile_ms: number;
+}
+
+export const DEFAULT_CONFIG: Omit<FolieConfig, "config_version" | "operator_token" | "model_api_key"> = {
+  kubeconfig_context: "kind-folie",
+  agent_image: "localhost:5001/folie-agent:dev",
+  default_model: "openrouter/deepseek/deepseek-chat",
+  atespace: "folie",
+  agent_runtime: "pi",
+  agent_env: [],
+  server_port: 8080,
+  reconcile_ms: 2000,
+};
+
+export function getConfigDir(): string {
+  const xdg = process.env.XDG_CONFIG_HOME;
+  const base = xdg ?? join(homedir(), ".config");
+  return join(base, CONFIG_DIR_NAME);
+}
+
+export function getConfigPath(): string {
+  return join(getConfigDir(), CONFIG_FILE_NAME);
+}
+
+function generateOperatorToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+function maskSecret(value: string): string {
+  if (!value) return "";
+  return value.length > 4 ? `${value.slice(0, 2)}${'*'.repeat(value.length - 4)}${value.slice(-2)}` : '****';
+}
+
+export function loadConfig(): FolieConfig | null {
+  const path = getConfigPath();
+  if (!existsSync(path)) return null;
+
+  try {
+    const content = readFileSync(path, "utf8");
+    const parsed = parseYaml(content);
+    if (!parsed || typeof parsed !== 'object') return null;
+    // Validate required fields exist
+    const required = ['config_version', 'kubeconfig_context', 'operator_token', 'agent_image', 'default_model', 'model_api_key', 'atespace', 'agent_runtime', 'agent_env', 'server_port', 'reconcile_ms'];
+    for (const field of required) {
+      if (!(field in parsed)) return null;
+    }
+    return parsed as unknown as FolieConfig;
+  } catch {
+    return null;
+  }
+}
+
+export function saveConfig(config: FolieConfig): void {
+  const dir = getConfigDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  const path = getConfigPath();
+  const yaml = stringifyYaml(config as unknown as Record<string, unknown>);
+  writeFileSync(path, yaml, { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+export function ensureConfig(): FolieConfig {
+  let config = loadConfig();
+  if (!config) {
+    config = createDefaultConfig();
+    saveConfig(config);
+  }
+  return config;
+}
+
+export function createDefaultConfig(): FolieConfig {
+  return {
+    config_version: CONFIG_VERSION,
+    kubeconfig_context: DEFAULT_CONFIG.kubeconfig_context,
+    operator_token: generateOperatorToken(),
+    agent_image: DEFAULT_CONFIG.agent_image,
+    default_model: DEFAULT_CONFIG.default_model,
+    model_api_key: "",
+    atespace: DEFAULT_CONFIG.atespace,
+    agent_runtime: DEFAULT_CONFIG.agent_runtime,
+    agent_env: DEFAULT_CONFIG.agent_env,
+    server_port: DEFAULT_CONFIG.server_port,
+    reconcile_ms: DEFAULT_CONFIG.reconcile_ms,
+  };
+}
+
+export function getEffectiveConfig(): FolieConfig {
+  const config = ensureConfig();
+
+  // Env vars override config (for CI/CD)
+  const env = process.env;
+  const result = { ...config };
+
+  if (env.FOLIE_KUBECONFIG_CONTEXT) result.kubeconfig_context = env.FOLIE_KUBECONFIG_CONTEXT;
+  if (env.FOLIE_OPERATOR_TOKEN) result.operator_token = env.FOLIE_OPERATOR_TOKEN;
+  if (env.FOLIE_AGENT_IMAGE) result.agent_image = env.FOLIE_AGENT_IMAGE;
+  if (env.FOLIE_MODEL) result.default_model = env.FOLIE_MODEL;
+  if (env.FOLIE_AGENT_ENV_OPENROUTER_API_KEY) result.model_api_key = env.FOLIE_AGENT_ENV_OPENROUTER_API_KEY;
+  if (env.FOLIE_ATESPACE) result.atespace = env.FOLIE_ATESPACE;
+  if (env.FOLIE_RUNTIME) result.agent_runtime = env.FOLIE_RUNTIME as "pi" | "echo";
+  if (env.FOLIE_SERVER_PORT) result.server_port = parseInt(env.FOLIE_SERVER_PORT, 10);
+  if (env.FOLIE_RECONCILE_MS) result.reconcile_ms = parseInt(env.FOLIE_RECONCILE_MS, 10);
+
+  // Agent env vars: FOLIE_AGENT_ENV_<KEY>
+  if (Object.keys(env).some(k => k.startsWith("FOLIE_AGENT_ENV_"))) {
+    result.agent_env = Object.entries(env)
+      .filter(([k]) => k.startsWith("FOLIE_AGENT_ENV_"))
+      .map(([k, v]) => ({ key: k.replace("FOLIE_AGENT_ENV_", ""), value: v ?? "" }));
+  }
+
+  return result;
+}
+
+export function getConfigForDisplay(config: FolieConfig): Record<string, string> {
+  return {
+    "config_version": String(config.config_version),
+    "kubeconfig_context": config.kubeconfig_context,
+    "operator_token": maskSecret(config.operator_token),
+    "agent_image": config.agent_image,
+    "default_model": config.default_model,
+    "model_api_key": maskSecret(config.model_api_key),
+    "atespace": config.atespace,
+    "agent_runtime": config.agent_runtime,
+    "agent_env": config.agent_env.length > 0
+      ? config.agent_env.map(e => `${e.key}=${maskSecret(e.value)}`).join(", ")
+      : "(empty)",
+    "server_port": String(config.server_port),
+    "reconcile_ms": String(config.reconcile_ms),
+  };
+}
+
+export function validateConfig(config: FolieConfig): string[] {
+  const errors: string[] = [];
+
+  if (!config.kubeconfig_context) errors.push("kubeconfig_context is required");
+  if (!config.operator_token) errors.push("operator_token is required");
+  if (!config.agent_image) errors.push("agent_image is required");
+  if (!config.default_model) errors.push("default_model is required");
+  if (!config.model_api_key) errors.push("model_api_key is required");
+  if (!config.atespace) errors.push("atespace is required");
+  if (!["pi", "echo"].includes(config.agent_runtime)) errors.push("agent_runtime must be 'pi' or 'echo'");
+  if (config.server_port < 1 || config.server_port > 65535) errors.push("server_port must be 1-65535");
+  if (config.reconcile_ms < 100) errors.push("reconcile_ms must be >= 100");
+
+  return errors;
+}
+
+// Simple YAML parser/stringifier for our flat config structure
+// Avoids external dependency; handles our known structure only.
+
+function parseYaml(content: string): Record<string, unknown> | null {
+  const result: Record<string, unknown> = {};
+  const lines = content.split('\n');
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const colonIndex = trimmed.indexOf(':');
+    if (colonIndex === -1) continue;
+
+    const key = trimmed.slice(0, colonIndex).trim();
+    let value = trimmed.slice(colonIndex + 1).trim();
+
+    // Remove inline comments
+    const commentIndex = value.indexOf(' #');
+    if (commentIndex !== -1) value = value.slice(0, commentIndex).trim();
+
+    // Handle arrays (agent_env)
+    if (value.startsWith('[') && value.endsWith(']')) {
+      const inner = value.slice(1, -1).trim();
+      if (!inner) {
+        result[key] = [];
+      } else {
+        result[key] = inner.split(',').map(s => s.trim()).filter(Boolean);
+      }
+      continue;
+    }
+
+    // Handle quoted strings
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+
+    // Handle booleans
+    if (value === 'true') result[key] = true;
+    else if (value === 'false') result[key] = false;
+    // Handle numbers
+    else if (/^-?\d+$/.test(value)) result[key] = parseInt(value, 10);
+    else if (/^-?\d+\.\d+$/.test(value)) result[key] = parseFloat(value);
+    else result[key] = value;
+  }
+
+  return result;
+}
+
+function stringifyYaml(obj: Record<string, unknown>): string {
+  const lines: string[] = [];
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (Array.isArray(value)) {
+      if (value.length === 0) {
+        lines.push(`${key}: []`);
+      } else {
+        lines.push(`${key}: [${value.map(v => stringifyValue(v)).join(", ")}]`);
+      }
+    } else {
+      lines.push(`${key}: ${stringifyValue(value)}`);
+    }
+  }
+
+  return lines.join('\n') + '\n';
+}
+
+function stringifyValue(value: unknown): string {
+  if (typeof value === 'string') {
+    if (/^[a-zA-Z0-9._/-]+$/.test(value)) return value;
+    return `"${value.replace(/"/g, '\\"')}"`;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value === null) return 'null';
+  return String(value);
+}

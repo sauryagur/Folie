@@ -1,21 +1,28 @@
-// CLI commands over FolieClient. Pure of process state so they can be tested with a fake client and sink.
-import { parseArgs } from "node:util";
-import type { FolieClient } from "../shared/client";
-import type { WorkItemView } from "../shared/types";
+import { configCommand } from "./config";
 
-export type Api = Pick<
-  FolieClient,
-  | "submitGoal"
-  | "workItem"
-  | "agents"
-  | "topics"
-  | "subscribe"
-  | "unsubscribe"
-  | "publish"
-  | "queueCancel"
-  | "agentOp"
->;
-export type Out = (line: string) => void;
+ // CLI commands over FolieClient. Pure of process state so they can be tested with a fake client and sink.
+ import { parseArgs } from "node:util";
+ import type { FolieClient } from "../shared/client";
+ import type { WorkItemView } from "../shared/types";
+
+ export type Api = Pick<
+   FolieClient,
+   | "submitGoal"
+   | "workItem"
+   | "agents"
+   | "topics"
+   | "subscribe"
+   | "unsubscribe"
+   | "publish"
+   | "queueCancel"
+   | "agentOp"
+   | "control"
+ >;
+ export type Out = (line: string) => void;
+
+ export const config = async (api: Api, args: string[], out: Out): Promise<number> => {
+   return configCommand(args[0] as "init" | "view" | "edit" | "set" | "get" | "validate", args.slice(1), api);
+ };
 
 export interface Options {
   /** Delay between polls of `submit --wait`. */
