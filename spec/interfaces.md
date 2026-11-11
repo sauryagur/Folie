@@ -1,6 +1,8 @@
 # Interfaces and contracts
 
-Status: **target specification**; TypeScript is the notation because the code is TypeScript. Signatures show shape and responsibilities, not final spellings. Where an interface evolves something that exists, the existing file is named. State: [`domain-model.md`](domain-model.md). Behaviour: [`protocols.md`](protocols.md).
+> **Historical target specification:** This page records the previous design and is retained for migration context. Its contracts and references are not current mandates. See the [architecture reset proposal](../docs/architecture/README.md) and [as-built snapshot](../architecture/current-system.md).
+
+Historical status: target interface specification for the previous design.
 
 ## 1. Layering and the dependency rule
 

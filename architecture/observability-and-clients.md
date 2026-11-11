@@ -1,6 +1,8 @@
 # OpenTelemetry and clients
 
-Status: **target architecture**; today's tracing, metrics, logs, OTLP gateway and TUI are in [`current-system.md`](current-system.md#observability) and are the base this builds on. Authority: [`../DESIGN.md`](../DESIGN.md) §17, §18. Names are normative for new work; existing names are listed where they change.
+> **Historical target document:** This page describes the previous design and is retained for migration context. Its requirements and links to the old specs are not current mandates. See the [architecture reset proposal](../docs/architecture/README.md) for the current direction and [as-built snapshot](current-system.md) for implementation notes.
+
+Historical status: target architecture at the time of writing.
 
 ## OpenTelemetry
 

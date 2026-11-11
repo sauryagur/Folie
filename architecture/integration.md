@@ -1,6 +1,8 @@
 # Capabilities, tools and extensions
 
-Status: **target architecture**. Today Folie has six built-in swarm tools plus pi's coding tools and no capability or extension concept ([`current-system.md`](current-system.md#agent-image)). Authority: [`../DESIGN.md`](../DESIGN.md) §11, §19. Contracts: [`../spec/interfaces.md`](../spec/interfaces.md) §6, §8. Governance of use: [`governance-and-resources.md`](governance-and-resources.md).
+> **Historical target document:** This page describes the previous design and is retained for migration context. Its requirements and links to the old specs are not current mandates. See the [architecture reset proposal](../docs/architecture/README.md) for the current direction and [as-built snapshot](current-system.md) for implementation notes.
+
+Historical status: target architecture at the time of writing.
 
 **Four words, four things.** Conflating them is the commonest design error in agent platforms.
 

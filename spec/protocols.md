@@ -1,6 +1,8 @@
 # Protocols
 
-Status: **target specification**. State and transitions: [`domain-model.md`](domain-model.md). Contracts: [`interfaces.md`](interfaces.md). Rationale: [`../decisions/`](../decisions/README.md).
+> **Historical target specification:** This page records the previous design and is retained for migration context. Its protocols and references are not current mandates. See the [architecture reset proposal](../docs/architecture/README.md) and [as-built snapshot](../architecture/current-system.md).
+
+Historical status: target protocol specification for the previous design.
 
 Every protocol below follows the same discipline: agents _propose and negotiate_ over messages; the runtime _decides_ with one conditional database update; correctness never depends on an agent obeying a message. Failure behaviour is stated per protocol.
 
