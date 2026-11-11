@@ -1,9 +1,9 @@
-// The ax adapter: ExecutionProvider over ax's gRPC API (pkg/apis/v1alpha1/ax.proto, bundled in proto/).
+// The ax adapter: ExecutionProvider over ax's gRPC API (pkg/apis/v1alpha1/*.proto, vendored in proto/ax/).
 // Network policy is delegated to the Substrate EgressPolicies port; ax tasks carry no network spec.
 // API notes verified against current ax: UpdateWorkspace upserts (no CreateWorkspace RPC);
 // created tasks start in Pending; TaskStatus.phase is one of Suspended|Pending|Running|Terminating|Failed|Completed.
 import * as grpc from "@grpc/grpc-js";
-import { callUnary, isGrpcStatus, loadService } from "./grpc";
+import { AX_PROTO, callUnary, isGrpcStatus, loadService } from "./grpc";
 import type {
   ExecutionCapabilities,
   ExecutionPhase,
@@ -47,7 +47,7 @@ export function grpcAxClient(
   egress: EgressPolicies,
   protoDir?: string,
 ): ExecutionProvider {
-  const AX = loadService("ax.proto", ["ax", "v1alpha1", "AX"], protoDir);
+  const AX = loadService(AX_PROTO, ["ax", "v1alpha1", "AX"], protoDir);
   const c = new AX(address, grpc.credentials.createInsecure());
   const capabilities: ExecutionCapabilities = {
     suspend: true,

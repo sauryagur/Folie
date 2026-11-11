@@ -8,21 +8,48 @@ import { traceHeaders } from "../shared/trace";
 export const defaultProtoDir = () =>
   process.env.FOLIE_PROTO_DIR ?? join(import.meta.dirname, "../../proto");
 
+/**
+ * A vendored proto: `root` is its import root under the proto dir, `file` its upstream path below that root,
+ * so the upstream `import "pkg/apis/…"` lines resolve unchanged.
+ */
+export interface ProtoSource {
+  root: string;
+  file: string;
+}
+
+/** ax (google/ax), split per resource upstream; the entry file imports the rest. */
+export const AX_PROTO: ProtoSource = {
+  root: "ax",
+  file: "pkg/apis/v1alpha1/ax.proto",
+};
+
+/** Agent Substrate's control API (package substrate.ateapi.v1 since Substrate v1.0.0). */
+export const SUBSTRATE_PROTO: ProtoSource = {
+  root: "substrate",
+  file: "api/ateapi/v1/ateapi.proto",
+};
+
 /** Loads `<pkg path>` from a vendored proto and returns its service constructor. */
 export function loadService(
-  protoFile: string,
+  source: ProtoSource,
   servicePath: string[],
   protoDir = defaultProtoDir(),
 ): grpc.ServiceClientConstructor {
-  const def = protoLoader.loadSync(join(protoDir, protoFile), {
+  const def = protoLoader.loadSync(source.file, {
+    includeDirs: [join(protoDir, source.root)],
     keepCase: false,
     longs: String,
     defaults: true,
     oneofs: true,
   });
   let node: unknown = grpc.loadPackageDefinition(def);
-  for (const part of servicePath)
-    node = (node as Record<string, unknown>)[part];
+  for (const part of servicePath) {
+    node = (node as Record<string, unknown> | undefined)?.[part];
+    if (node === undefined)
+      throw new Error(
+        `${source.root}/${source.file} has no service ${servicePath.join(".")}`,
+      );
+  }
   return node as grpc.ServiceClientConstructor;
 }
 
