@@ -79,6 +79,7 @@ function fakeApi(states: WorkItemView[], topicList: TopicInfo[] = []) {
       topicCalls.push(`${op} ${agent}`),
       { agent, state: op === "suspend" ? "suspended" : "running" }
     ),
+    control: async (agent: string, after?: number) => ({ cursor: 0, actions: [] }),
   };
   return { api, submitted, topicCalls, polls: () => polls };
 }

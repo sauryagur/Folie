@@ -2,6 +2,7 @@
 import {
   agents,
   cancel,
+  config,
   pause,
   publish,
   resume,
@@ -15,12 +16,13 @@ import {
 import { down, up } from "./host/cluster";
 import { operatorTokenFromEnvOrFile, withServerUrl } from "./host/portforward";
 import { FolieClient } from "./shared/client";
+import { getEffectiveConfig } from "./config";
 
 type Command = (args: string[]) => Promise<number | void>;
 
 function operatorClient(url: string): FolieClient {
-  const token =
-    process.env.FOLIE_OPERATOR_TOKEN ?? operatorTokenFromEnvOrFile();
+  const cfg = getEffectiveConfig();
+  const token = process.env.FOLIE_OPERATOR_TOKEN ?? cfg.operator_token;
   if (!token)
     throw new Error(
       "FOLIE_OPERATOR_TOKEN is required for CLI/TUI. Set it to the operator credential (see `folie up`).",
@@ -42,16 +44,8 @@ const viaServer =
 const commands: Record<string, Command> = {
   up,
   down,
+  config: (args) => withServerUrl((url) => config(operatorClient(url), args, console.log)),
   submit: viaServer(submit),
-  status: viaServer(status),
-  agents: viaServer(agents),
-  topics: viaServer(topics),
-  subscribe: viaServer(subscribe),
-  unsubscribe: viaServer(unsubscribe),
-  publish: viaServer(publish),
-  cancel: viaServer(cancel),
-  pause: viaServer(pause),
-  resume: viaServer(resume),
 };
 
 const [name, ...args] = process.argv.slice(2);
