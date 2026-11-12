@@ -9,7 +9,7 @@ The working plan and its evidence gates are in [`docs/architecture/build-plan.md
 ## Current checkout
 
 - Branch: `build/local-runtime`.
-- Worktree is intentionally dirty and contains the current implementation attempt plus earlier architecture-reset context edits. Do not reset or discard it. No commit has been made.
+- Worktree may be dirty after handoff edits. Do not reset or discard unrelated changes. Latest implementation commit on this branch: local profile / PGlite / Strands (`git log -1 --oneline`).
 - The previous active goal was explicitly paused by the user. The latest instruction was to prioritize this handoff document; continue project implementation only when the user resumes/requests it.
 - Latest verification in this worktree: full `vitest run` (506 passed, 11 skipped), `tsc --noEmit`, and the focused checks listed below.
 
@@ -43,7 +43,7 @@ The working plan and its evidence gates are in [`docs/architecture/build-plan.md
 - `git diff --check` passed (when last run).
 - Persisted-session settlement: mid-session consumed message ids appear on reports after settle (regression covered in `test/e2e.test.ts` steering case).
 - File-backed PGlite gate (partial): `test/server/pglite-persistence.test.ts` — migrate, parallel inserts, close, reopen, remigrate, rows intact.
-- Deterministic local lifecycle (partial): `test/local-lifecycle.test.ts` with `test/support/local-stack.ts` — temp `FOLIE_HOME`, file-backed PGlite, local HTTP + echo child agents; work item/report survive server stop and restart. Does **not** exercise `folie config init`, `folie up`/`down` CLI, or Strands.
+- Deterministic local lifecycle (partial): `test/local-lifecycle.test.ts` with `test/support/local-stack.ts` — temp `FOLIE_HOME`, file-backed PGlite, in-process HTTP + echo agents; work item/report survive server stop and restart. CLI path: `test/cli/local-up-down.test.ts` — real `folie up` / `submit --wait` / `down` / `up` with temp `FOLIE_HOME` + `XDG_CONFIG_HOME` and echo runtime. Does **not** exercise `folie config init` or Strands on the CLI stack.
 - Focused Strands adapter tests (`test/agent/strands-runtime.test.ts`): report_submit mapping, workspace/artifact tools, inbox steering, tool replay flags, and pre-run cancellation.
 - Authenticated artifact retrieval: HTTP/CLI (`test/server/http.test.ts`) and TUI inspector fetch (`[d]` / `artifact` command).
 - **Not run / still open:** concurrency/load PGlite stress, crash-kill recovery, clean-install packaging from empty `node_modules`, PostgreSQL logical export/import, OpenRouter live smoke, steer-while-running Strands on local stack.
@@ -53,7 +53,7 @@ The working plan and its evidence gates are in [`docs/architecture/build-plan.md
 Continue the **same first product iteration**; do not begin the optional AX profile or coding application yet.
 
 1. ~~Inspect the full diff and fix integration issues; add focused Strands/session tests~~ **largely done:** full vitest green; Strands adapter + persisted-session + loop/e2e steering coverage; settle persists full `message_ids`. Remaining: occasional re-run after large diffs; Strands HTTP e2e still absent.
-2. Verify a clean local setup flow (`config init` → `up` → submit → inspect → `down`) on a clean temporary home. **partial:** `test/local-lifecycle.test.ts` proves restart persistence for echo/local PGlite stack; still need CLI `up`/`down` path, transcript/history inspection assertions, steer-while-running Strands, and optional OpenRouter smoke (credentials only).
+2. Verify a clean local setup flow (`config init` → `up` → submit → inspect → `down`) on a clean temporary home. **partial:** `test/local-lifecycle.test.ts` + `test/cli/local-up-down.test.ts` prove restart persistence via in-process stack and real CLI up/down; still need `config init` wizard path, transcript/history inspection assertions, steer-while-running Strands, and optional OpenRouter smoke (credentials only).
 3. ~~Artifact retrieval surface~~ **done:** `GET /v1/artifacts?ref=…` + `folie artifact` + TUI inspector (`[d]` / `artifact` command via `fetchArtifact`).
 4. Finish the PGlite gate before calling it a supported default. **partial:** `test/server/pglite-persistence.test.ts` covers file-backed close/reopen + remigrate; still open: production-shaped transactions/concurrency under load, abrupt crash recovery, resource metrics, clean Bun/Node packaging, logical PostgreSQL export/import. Until closed, describe PGlite as provisional for local mode.
 5. Update the architecture/build-plan evidence status and this handoff when these checks change. Keep AX/Substrate explicitly optional and unverified until run against a live deployment.
