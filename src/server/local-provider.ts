@@ -178,6 +178,12 @@ export class LocalProcessProvider implements ExecutionProvider {
     const execution = this.requireExecution(ref);
     if (execution.phase === "running" && execution.child)
       return this.state(execution);
+    if (
+      execution.phase === "provisioning" &&
+      execution.child &&
+      !hasExited(execution.child)
+    )
+      return this.state(execution);
 
     if (execution.phase === "suspended" && execution.child) {
       if (!supportsSuspend)

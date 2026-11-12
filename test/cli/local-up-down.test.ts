@@ -67,7 +67,7 @@ async function writeLocalConfig(xdgHome: string, port: number) {
     `operator_token: ${operatorToken}`,
     "default_model: openrouter/deepseek/deepseek-chat",
     'model_api_key: ""',
-    "atespace: folie",
+    "namespace: folie",
     "agent_runtime: echo",
     "agent_env: []",
     `server_port: ${port}`,

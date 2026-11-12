@@ -32,11 +32,21 @@ export interface LocalStack {
   stop: () => Promise<void>;
 }
 
+export interface LocalStackOptions {
+  /** Agent program for local child processes (defaults to production main). */
+  agentMain?: string;
+  runtime?: string;
+  extraEnv?: Record<string, string>;
+  /** Background dispatch/reconcile timer (default true). */
+  periodicReconcile?: boolean;
+}
+
 export async function startLocalStack(
   home: string,
   port: number,
   operatorToken: string,
   reconcileMs = 250,
+  options: LocalStackOptions = {},
 ): Promise<LocalStack> {
   const paths = localPaths(home);
   await mkdir(paths.databaseDir, { recursive: true, mode: 0o700 });
@@ -55,11 +65,12 @@ export async function startLocalStack(
   const controllerCfg: ControllerConfig = {
     namespace: "folie",
     image: "local-process",
-    command: ["bun", AGENT_MAIN],
+    command: ["bun", options.agentMain ?? AGENT_MAIN],
     env: {
       FOLIE_SERVER_URL: `http://127.0.0.1:${port}`,
-      FOLIE_RUNTIME: "echo",
+      FOLIE_RUNTIME: options.runtime ?? "echo",
       FOLIE_POLL_MS: String(reconcileMs),
+      ...options.extraEnv,
     },
     suspendAfterSec: 315_360_000,
     deleteAfterSec: 315_360_001,
@@ -85,7 +96,7 @@ export async function startLocalStack(
   );
 
   let reconciling = false;
-  const timer = setInterval(async () => {
+  const reconcileOnce = async () => {
     if (reconciling) return;
     reconciling = true;
     try {
@@ -94,7 +105,11 @@ export async function startLocalStack(
     } finally {
       reconciling = false;
     }
-  }, reconcileMs);
+  };
+  const timer =
+    options.periodicReconcile === false
+      ? undefined
+      : setInterval(() => void reconcileOnce(), reconcileMs);
 
   const client = new FolieClient(
     `http://127.0.0.1:${port}`,
@@ -105,11 +120,10 @@ export async function startLocalStack(
   return {
     client,
     async tick() {
-      await service.dispatchQueued(1);
-      await controller.reconcileOnce();
+      await reconcileOnce();
     },
     async stop() {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
       await new Promise<void>((r) => server.close(() => r()));
       await provider.close();
       await db.close();

@@ -69,6 +69,8 @@ export function loadConfig(): FolieConfig | null {
     const content = readFileSync(path, "utf8");
     const parsed = parseYaml(content);
     if (!parsed || typeof parsed !== 'object') return null;
+    if (!("atespace" in parsed) && typeof parsed.namespace === "string")
+      parsed.atespace = parsed.namespace;
     // Validate required fields exist
     const required = ['config_version', 'operator_token', 'default_model', 'model_api_key', 'atespace', 'agent_runtime', 'agent_env', 'server_port', 'reconcile_ms'];
     for (const field of required) {

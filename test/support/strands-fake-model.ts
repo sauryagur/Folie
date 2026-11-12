@@ -13,8 +13,8 @@ import {
 import type { Message, StopReason } from "@strands-agents/sdk";
 
 export type FakeTurn =
-  | { kind: "text"; text: string; stopReason?: StopReason }
-  | { kind: "tools"; calls: { name: string; input: Record<string, unknown> }[] };
+  | { kind: "text"; text: string; stopReason?: StopReason; holdMs?: number }
+  | { kind: "tools"; calls: { name: string; input: Record<string, unknown> }[]; holdMs?: number };
 
 /** Deterministic Strands Model for adapter tests; one queue entry per model invocation. */
 export class FakeStrandsModel extends Model {
@@ -61,6 +61,8 @@ export class FakeStrandsModel extends Model {
       yield new ModelMessageStopEvent({ type: "modelMessageStopEvent", stopReason: "endTurn" });
       return;
     }
+
+    if (turn.holdMs) await new Promise((r) => setTimeout(r, turn.holdMs));
 
     if (turn.kind === "text") {
       yield new ModelContentBlockStartEvent({ type: "modelContentBlockStartEvent" });
