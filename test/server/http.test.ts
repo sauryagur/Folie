@@ -177,6 +177,20 @@ describe("API through the typed client", () => {
     ]); // acked mail stays in the log
   });
 
+  it("stores and retrieves artifacts by ref", async () => {
+    const body = new TextEncoder().encode("finding: ships here");
+    const put = await asAgentClient("a").uploadArtifact(body, {
+      name: "note.txt",
+      mediaType: "text/plain; charset=utf-8",
+    });
+    const got = await client.fetchArtifact(put.ref);
+    expect(got.ref).toBe(put.ref);
+    expect(got.sha256).toBe(put.sha256);
+    expect(new TextDecoder().decode(got.bytes)).toBe("finding: ships here");
+    expect((await raw("GET", "/v1/artifacts")).status).toBe(400);
+    expect((await raw("GET", "/v1/artifacts?ref=missing")).status).toBe(404);
+  });
+
   it("lists reports newest first, for one agent or all", async () => {
     for (const agent of ["a", "b"]) {
       const m = await client.send({ from: "human", to: agent, body: "x" });

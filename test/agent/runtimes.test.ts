@@ -23,6 +23,11 @@ const server = {
     throw new Error("unused");
   },
   attempts: async () => [],
+  uploadArtifact: async (bytes: Uint8Array) => ({
+    sha256: "0".repeat(64),
+    ref: "artifact:sha256:" + "0".repeat(64),
+    bytes: bytes.byteLength,
+  }),
 };
 const m = (id: number, from: string, body: string): Message => ({
   id,
@@ -49,7 +54,7 @@ describe("createRuntime", () => {
   it("rejects unknown runtimes, naming the choices", async () => {
     await expect(
       createRuntime({ ...env, runtime: "claude" }, server),
-    ).rejects.toThrow(/unknown FOLIE_RUNTIME.*pi\|echo/);
+    ).rejects.toThrow(/unknown FOLIE_RUNTIME.*strands\|pi\|echo/);
   });
 
   it.each(["noslash", "/model", ""])(

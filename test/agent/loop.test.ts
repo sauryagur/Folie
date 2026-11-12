@@ -8,6 +8,8 @@ import type {
   Message,
   SessionEventBatch,
   SessionEventInput,
+  SessionSummary,
+  StartSessionRequest,
   SubmitReportRequest,
 } from "../../src/shared/types";
 import { captureSink, memoryTelemetry } from "../support/otel";
@@ -42,12 +44,24 @@ const scoped = (mail: Message[], q: InboxQuery) =>
 class FakeServer implements AgentServer {
   reports: SubmitReportRequest[] = [];
   batches: SessionEventBatch[] = [];
+  sessionStarts: StartSessionRequest[] = [];
+  private nextSessionId = 1;
   reportError: Error | null = null;
   constructor(public mail: Message[]) {}
   get events(): SessionEventInput[] {
     return this.batches.flatMap((b) => b.events);
   }
   inbox = async (_agent: string, q: InboxQuery = {}) => scoped(this.mail, q);
+  startSession = async (r: StartSessionRequest): Promise<SessionSummary> => {
+    this.sessionStarts.push(r);
+    return {
+      sessionId: String(this.nextSessionId++),
+      agent: r.agent,
+      state: "running",
+      workItemId: r.workItemId ?? null,
+      startedAt: "",
+    };
+  };
   sessionEvents = async (b: SessionEventBatch) => (
     this.batches.push(b),
     { stored: b.events.length }
@@ -90,8 +104,10 @@ describe("AgentLoop.tick", () => {
   it("runs one session over a work item's mail and reports every message id", async () => {
     const server = new FakeServer([msg(1, 7), msg(2, 7, "more")]);
     const seen: Message[][] = [];
+    let startedSessionsAtRun = 0;
     const runtime: Runtime = {
       run: async (m) => (
+        (startedSessionsAtRun = server.sessionStarts.length),
         seen.push(m),
         { outcome: "done", summary: "all done" }
       ),
@@ -102,9 +118,19 @@ describe("AgentLoop.tick", () => {
     ).toBe(true);
 
     expect(seen).toEqual([[msg(1, 7), msg(2, 7, "more")]]);
+    expect(startedSessionsAtRun).toBe(1);
+    expect(server.sessionStarts).toEqual([
+      {
+        agent: "a",
+        messageIds: [1, 2],
+        clientRequestId: expect.any(String),
+        workItemId: 7,
+      },
+    ]);
     expect(server.reports).toHaveLength(1);
     expect(server.reports[0]).toMatchObject({
       agent: "a",
+      sessionId: "1",
       outcome: "done",
       summary: "all done",
       messageIds: [1, 2],
@@ -145,8 +171,8 @@ describe("bounded sessions", () => {
     await loop.tick();
 
     expect(sessions).toEqual([
-      { id: "s1", scope: "wi:5", batch: [1, 3] },
-      { id: "s2", scope: "wi:6", batch: [2] },
+      { id: "1", scope: "wi:5", batch: [1, 3] },
+      { id: "2", scope: "wi:6", batch: [2] },
     ]);
   });
 
@@ -291,12 +317,12 @@ describe("transcript and logs", () => {
     const server = new FakeServer([msg(1, 5)]);
     await new AgentLoop("a", server, done, {
       out: quiet,
-      newSessionId: () => "sess1",
+      newSessionId: () => "client-request-1",
     }).tick();
 
     expect(
       server.batches.every(
-        (b) => b.agent === "a" && b.sessionId === "sess1" && b.scope === "wi:5",
+        (b) => b.agent === "a" && b.sessionId === "1" && b.scope === "wi:5",
       ),
     ).toBe(true);
     const types = server.events.map((e) => e.type);

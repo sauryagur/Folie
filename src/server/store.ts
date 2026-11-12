@@ -85,7 +85,11 @@ export interface SessionRepo {
     agent: string,
     clientRequestId: string,
   ): Promise<SessionRecord | null>;
-  settle(id: number, outcome: string): Promise<SessionRecord | null>;
+  settle(
+    id: number,
+    outcome: string,
+    messageIds: number[],
+  ): Promise<SessionRecord | null>;
 }
 export interface TaskRepo {
   propose(b: {
@@ -320,6 +324,8 @@ export interface ReportRepo {
     usage?: SessionUsage;
     sessionId?: number;
   }): Promise<Report>;
+  /** Find the report already recorded for a server-owned session, if any. */
+  getBySession(sessionId: number): Promise<Report | null>;
   /** Newest first. */
   list(q: { agent?: string; limit?: number }): Promise<Report[]>;
 }

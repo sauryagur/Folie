@@ -7,6 +7,7 @@ import {
 } from "node:http";
 import { SpanKind } from "@opentelemetry/api";
 import { contextFrom, headersOf, withSpan } from "../shared/trace";
+import { MAX_ARTIFACT_UPLOAD_BYTES } from "../shared/types";
 import type {
   AgentOp,
   EventQuery,
@@ -39,12 +40,36 @@ import type { Store } from "./store";
 const MAX_BODY = 1 << 20;
 const MAX_OTLP_BODY = 8 << 20;
 
-async function rawBody(req: IncomingMessage, max: number): Promise<Buffer> {
+function artifactHeader(
+  req: IncomingMessage,
+  header: string,
+  limit: number,
+): string | undefined {
+  const raw = req.headers[header];
+  if (raw === undefined) return undefined;
+  if (Array.isArray(raw))
+    throw new ValidationError(`${header}: single value required`);
+  let value: string;
+  try {
+    value = decodeURIComponent(raw);
+  } catch {
+    throw new ValidationError(`${header}: invalid encoded value`);
+  }
+  if (value.length > limit)
+    throw new ValidationError(`${header}: maximum ${limit} characters`);
+  return value;
+}
+
+async function rawBody(
+  req: IncomingMessage,
+  max: number,
+  tooLargeMessage = "body too large",
+): Promise<Buffer> {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const c of req) {
     size += (c as Buffer).length;
-    if (size > max) throw new ValidationError("body too large");
+    if (size > max) throw new ValidationError(tooLargeMessage);
     chunks.push(c as Buffer);
   }
   return Buffer.concat(chunks);
@@ -205,6 +230,49 @@ function routes(
       "POST",
       /^\/v1\/reports$/,
       async (_, req, p) => svc.submitReport(await jsonBody(req), p),
+    ],
+    [
+      "GET",
+      /^\/v1\/artifacts$/,
+      (_, req) => {
+        const ref = queryParams(req).get("ref");
+        if (!ref) throw new ValidationError("ref: required");
+        return getArtifactBytes(store, ref);
+      },
+    ],
+    [
+      "POST",
+      /^\/v1\/artifacts$/,
+      async (_, req, p) => {
+        const length = req.headers["content-length"];
+        if (
+          length !== undefined &&
+          Number(length) > MAX_ARTIFACT_UPLOAD_BYTES
+        )
+          throw new ValidationError(
+            `artifact exceeds ${MAX_ARTIFACT_UPLOAD_BYTES} byte upload limit`,
+          );
+        const bytes = await rawBody(
+          req,
+          MAX_ARTIFACT_UPLOAD_BYTES,
+          `artifact exceeds ${MAX_ARTIFACT_UPLOAD_BYTES} byte upload limit`,
+        );
+        const name = artifactHeader(req, "x-folie-artifact-name", 1024);
+        const description = artifactHeader(
+          req,
+          "x-folie-artifact-description",
+          4096,
+        );
+        const producer =
+          p.kind === "agent" ? `agent:${p.name}` : `human:${p.name}`;
+        return store.artifacts.put({
+          bytes,
+          mediaType: req.headers["content-type"] ?? "application/octet-stream",
+          name,
+          description,
+          producer,
+        });
+      },
     ],
     ["GET", /^\/v1\/topics$/, (_, __, p) => svc.listTopicsFor(p)],
     [
@@ -457,6 +525,36 @@ function routes(
   ];
 }
 
+type HttpArtifactBody = {
+  kind: "artifact-bytes";
+  mediaType: string;
+  name: string;
+  sha256: string;
+  ref: string;
+  data: Uint8Array;
+};
+
+async function getArtifactBytes(store: Store, ref: string): Promise<HttpArtifactBody> {
+  const artifact = await store.artifacts.get(ref);
+  if (!artifact) throw new NotFoundError(`artifact ${ref}`);
+  return {
+    kind: "artifact-bytes",
+    mediaType: artifact.mediaType,
+    name: artifact.name,
+    sha256: artifact.sha256,
+    ref: artifact.ref,
+    data: artifact.data,
+  };
+}
+
+function isArtifactBody(body: unknown): body is HttpArtifactBody {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    (body as HttpArtifactBody).kind === "artifact-bytes"
+  );
+}
+
 /** Replies as JSON. If the request body was left unread (rejected early), the socket must not be reused. */
 function reply(
   req: IncomingMessage,
@@ -629,6 +727,16 @@ export function httpServer(
           clearInterval(keepalive);
         });
         return;
+      }
+      if (isArtifactBody(result)) {
+        const headers: Record<string, string> = {
+          "content-type": result.mediaType,
+          "x-folie-artifact-ref": result.ref,
+          "x-folie-artifact-sha256": result.sha256,
+        };
+        if (result.name) headers["x-folie-artifact-name"] = encodeURIComponent(result.name);
+        if (!req.complete) headers.connection = "close";
+        return void res.writeHead(200, headers).end(Buffer.from(result.data));
       }
       reply(req, res, 200, result);
     } catch (e) {

@@ -211,3 +211,26 @@ export const pause = (api: Api, args: string[], out: Out) =>
   op(api, args, out, "pause");
 export const resume = (api: Api, args: string[], out: Out) =>
   op(api, args, out, "resume");
+
+export async function artifactGet(
+  api: Pick<FolieClient, "fetchArtifact">,
+  args: string[],
+  out: Out,
+): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { out: { type: "string" } },
+  });
+  const ref = positionals.join(" ").trim();
+  if (!ref) throw new Error('usage: folie artifact <ref> [--out <file>]');
+  const got = await api.fetchArtifact(ref);
+  if (values.out) {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(values.out, got.bytes);
+    out(`wrote ${got.bytes.byteLength} bytes to ${values.out} (${got.ref})`);
+  } else {
+    out(new TextDecoder().decode(got.bytes));
+  }
+  return 0;
+}

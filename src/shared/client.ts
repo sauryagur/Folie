@@ -1,9 +1,11 @@
 // Typed HTTP client for folie-server; used by the CLI, the TUI and the agent program.
 import { traceHeaders } from "./trace";
+import { MAX_ARTIFACT_UPLOAD_BYTES } from "./types";
 import type {
   AgentInfo,
   AgentOp,
   AgentOpResult,
+  ArtifactUploadResult,
   EventQuery,
   InboxQuery,
   Message,
@@ -13,6 +15,8 @@ import type {
   Report,
   SendMessageRequest,
   SendResult,
+  SessionSummary,
+  StartSessionRequest,
   SessionEvent,
   SessionEventBatch,
   SubmitGoalRequest,
@@ -167,6 +171,84 @@ export class FolieClient {
   /** Appends a session's transcript events. Safe to resend: events are keyed by (sessionId, seq). */
   sessionEvents(batch: SessionEventBatch) {
     return this.req<{ stored: number }>("POST", "/v1/sessions/events", batch);
+  }
+  /** Creates a server-owned session and leases its starting messages. */
+  startSession(r: StartSessionRequest) {
+    return this.req<SessionSummary>("POST", "/v1/sessions", r);
+  }
+  /** Uploads bytes to the content-addressed artifact store; producer identity comes from this client's token. */
+  async uploadArtifact(
+    bytes: Uint8Array,
+    metadata: { name?: string; description?: string; mediaType?: string } = {},
+  ): Promise<ArtifactUploadResult> {
+    if (bytes.byteLength > MAX_ARTIFACT_UPLOAD_BYTES)
+      throw new Error(
+        `artifact exceeds ${MAX_ARTIFACT_UPLOAD_BYTES} byte upload limit`,
+      );
+    const headers = {
+      "content-type": metadata.mediaType ?? "application/octet-stream",
+      "x-folie-artifact-name": encodeURIComponent(metadata.name ?? ""),
+      "x-folie-artifact-description": encodeURIComponent(
+        metadata.description ?? "",
+      ),
+      ...traceHeaders(),
+      ...(this.bearerToken
+        ? { authorization: `Bearer ${this.bearerToken}` }
+        : {}),
+    };
+    const res = await this.fetchFn(this.baseUrl + "/v1/artifacts", {
+      method: "POST",
+      headers,
+      body: Uint8Array.from(bytes).buffer,
+      signal: AbortSignal.timeout(30_000),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+    };
+    if (!res.ok)
+      throw new Error(
+        `POST /v1/artifacts: ${res.status} ${data.error ?? res.statusText}`,
+      );
+    return data as ArtifactUploadResult;
+  }
+  /** Fetches artifact bytes by ref or bare sha256. */
+  async fetchArtifact(ref: string): Promise<{
+    bytes: Uint8Array;
+    mediaType: string;
+    ref: string;
+    sha256: string;
+    name: string;
+  }> {
+    const res = await this.fetchFn(
+      `${this.baseUrl}/v1/artifacts${queryString({ ref })}`,
+      {
+        method: "GET",
+        headers: {
+          ...traceHeaders(),
+          ...(this.bearerToken
+            ? { authorization: `Bearer ${this.bearerToken}` }
+            : {}),
+        },
+        signal: AbortSignal.timeout(60_000),
+      },
+    );
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(
+        `GET /v1/artifacts: ${res.status} ${data.error ?? res.statusText}`,
+      );
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const sha256 = res.headers.get("x-folie-artifact-sha256") ?? "";
+    const storedRef = res.headers.get("x-folie-artifact-ref") ?? ref;
+    const name = res.headers.get("x-folie-artifact-name");
+    return {
+      bytes,
+      mediaType: res.headers.get("content-type") ?? "application/octet-stream",
+      ref: storedRef,
+      sha256,
+      name: name ? decodeURIComponent(name) : "",
+    };
   }
   /** Reads transcript events, ascending by id; see EventQuery. */
   readEvents(q: EventQuery = {}) {

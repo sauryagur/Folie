@@ -64,24 +64,32 @@ describe("persisted sessions", () => {
     ).resolves.toEqual({ stored: 1 });
 
     // Reporting settles the same row instead of minting a new one.
-    const r = await service.submitReport(
-      {
-        agent: "a",
-        sessionId: s.sessionId,
-        startedAt: new Date().toISOString(),
-        outcome: "done",
-        summary: "ok",
-        messageIds: [m.id],
-      },
-      asAgent("a"),
-    );
+    const submission = {
+      agent: "a",
+      sessionId: s.sessionId,
+      startedAt: new Date().toISOString(),
+      outcome: "done" as const,
+      summary: "ok",
+      messageIds: [m.id],
+    };
+    const r = await service.submitReport(submission, asAgent("a"));
     expect(r.id).toBeGreaterThan(0);
+    const retry = await service.submitReport(submission, asAgent("a"));
+    expect(retry.id).toBe(r.id);
+    await expect(
+      service.submitReport(
+        { ...submission, summary: "different result" },
+        asAgent("a"),
+      ),
+    ).rejects.toBeInstanceOf(ValidationError);
     const rows = (
       await db.query("SELECT state, outcome, ended_at FROM sessions")
     ).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ state: "settled", outcome: "done" });
     expect(rows[0]!.ended_at).not.toBeNull();
+    const reportRows = (await db.query("SELECT id FROM reports")).rows;
+    expect(reportRows).toHaveLength(1);
   });
 
   it("is idempotent on clientRequestId and rejects another agent's messages", async () => {

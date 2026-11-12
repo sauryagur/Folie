@@ -14,6 +14,7 @@
     "@earendil-works/pi-agent-core": "^1.5.0",
     "@earendil-works/pi-ai": "^1.5.0",
     "@earendil-works/pi-coding-agent": "^1.5.0",
+    "@electric-sql/pglite": "^0.5.15",
     "@grpc/grpc-js": "^1.14.7",
     "@grpc/proto-loader": "^0.8.1",
     "@opentelemetry/api": "^1.10.0",
@@ -25,11 +26,13 @@
     "@opentelemetry/sdk-metrics": "^3.0.0",
     "@opentelemetry/sdk-trace": "^3.0.0",
     "@opentui/core": "^0.8.2",
+    "@strands-agents/sdk": "1.24.0",
+    "openai": "^6.45.0",
     "pg": "^8.23.1",
-    "typebox": "^1.4.3"
+    "typebox": "^1.4.3",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.15",
     "@types/bun": "^1.4.4",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",

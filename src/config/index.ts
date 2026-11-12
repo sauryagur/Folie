@@ -7,9 +7,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
-export const CONFIG_VERSION = 1;
+export const CONFIG_VERSION = 2;
 export const CONFIG_DIR_NAME = "folie";
 export const CONFIG_FILE_NAME = "config.yaml";
+export type ExecutionProfile = "local" | "ax";
 
 export interface AgentEnvEntry {
   key: string;
@@ -18,24 +19,24 @@ export interface AgentEnvEntry {
 
 export interface FolieConfig {
   config_version: number;
-  kubeconfig_context: string;
+  execution_profile: ExecutionProfile;
+  kubeconfig_context?: string;
   operator_token: string;
-  agent_image: string;
+  agent_image?: string;
   default_model: string;
   model_api_key: string;
   atespace: string;
-  agent_runtime: "pi" | "echo";
+  agent_runtime: "strands" | "pi" | "echo";
   agent_env: AgentEnvEntry[];
   server_port: number;
   reconcile_ms: number;
 }
 
 export const DEFAULT_CONFIG: Omit<FolieConfig, "config_version" | "operator_token" | "model_api_key"> = {
-  kubeconfig_context: "kind-folie",
-  agent_image: "localhost:5001/folie-agent:dev",
+  execution_profile: "local",
   default_model: "openrouter/deepseek/deepseek-chat",
   atespace: "folie",
-  agent_runtime: "pi",
+  agent_runtime: "strands",
   agent_env: [],
   server_port: 8080,
   reconcile_ms: 2000,
@@ -69,11 +70,25 @@ export function loadConfig(): FolieConfig | null {
     const parsed = parseYaml(content);
     if (!parsed || typeof parsed !== 'object') return null;
     // Validate required fields exist
-    const required = ['config_version', 'kubeconfig_context', 'operator_token', 'agent_image', 'default_model', 'model_api_key', 'atespace', 'agent_runtime', 'agent_env', 'server_port', 'reconcile_ms'];
+    const required = ['config_version', 'operator_token', 'default_model', 'model_api_key', 'atespace', 'agent_runtime', 'agent_env', 'server_port', 'reconcile_ms'];
     for (const field of required) {
       if (!(field in parsed)) return null;
     }
-    return parsed as unknown as FolieConfig;
+    const version = Number(parsed.config_version);
+    if (version !== 1 && version !== CONFIG_VERSION) return null;
+    const profile = parsed.execution_profile;
+    const execution_profile: ExecutionProfile =
+      profile === "local" || profile === "ax"
+        ? profile
+        // Preserve the old cluster-backed behavior for existing v1 installations.
+        : version === 1
+          ? "ax"
+          : "local";
+    return {
+      ...parsed,
+      config_version: CONFIG_VERSION,
+      execution_profile,
+    } as unknown as FolieConfig;
   } catch {
     return null;
   }
@@ -102,9 +117,8 @@ export function ensureConfig(): FolieConfig {
 export function createDefaultConfig(): FolieConfig {
   return {
     config_version: CONFIG_VERSION,
-    kubeconfig_context: DEFAULT_CONFIG.kubeconfig_context,
+    execution_profile: DEFAULT_CONFIG.execution_profile,
     operator_token: generateOperatorToken(),
-    agent_image: DEFAULT_CONFIG.agent_image,
     default_model: DEFAULT_CONFIG.default_model,
     model_api_key: "",
     atespace: DEFAULT_CONFIG.atespace,
@@ -122,22 +136,25 @@ export function getEffectiveConfig(): FolieConfig {
   const env = process.env;
   const result = { ...config };
 
+  if (env.FOLIE_EXECUTION_PROFILE)
+    result.execution_profile = env.FOLIE_EXECUTION_PROFILE as ExecutionProfile;
   if (env.FOLIE_KUBECONFIG_CONTEXT) result.kubeconfig_context = env.FOLIE_KUBECONFIG_CONTEXT;
   if (env.FOLIE_OPERATOR_TOKEN) result.operator_token = env.FOLIE_OPERATOR_TOKEN;
   if (env.FOLIE_AGENT_IMAGE) result.agent_image = env.FOLIE_AGENT_IMAGE;
   if (env.FOLIE_MODEL) result.default_model = env.FOLIE_MODEL;
   if (env.FOLIE_AGENT_ENV_OPENROUTER_API_KEY) result.model_api_key = env.FOLIE_AGENT_ENV_OPENROUTER_API_KEY;
   if (env.FOLIE_ATESPACE) result.atespace = env.FOLIE_ATESPACE;
-  if (env.FOLIE_RUNTIME) result.agent_runtime = env.FOLIE_RUNTIME as "pi" | "echo";
+  if (env.FOLIE_RUNTIME) result.agent_runtime = env.FOLIE_RUNTIME as FolieConfig["agent_runtime"];
   if (env.FOLIE_SERVER_PORT) result.server_port = parseInt(env.FOLIE_SERVER_PORT, 10);
   if (env.FOLIE_RECONCILE_MS) result.reconcile_ms = parseInt(env.FOLIE_RECONCILE_MS, 10);
 
-  // Agent env vars: FOLIE_AGENT_ENV_<KEY>
-  if (Object.keys(env).some(k => k.startsWith("FOLIE_AGENT_ENV_"))) {
-    result.agent_env = Object.entries(env)
-      .filter(([k]) => k.startsWith("FOLIE_AGENT_ENV_"))
-      .map(([k, v]) => ({ key: k.replace("FOLIE_AGENT_ENV_", ""), value: v ?? "" }));
+  // Environment overrides configured entries with the same key and preserves the rest.
+  const agentEnv = new Map(result.agent_env.map((entry) => [entry.key, entry.value]));
+  for (const [name, value] of Object.entries(env)) {
+    if (!name.startsWith("FOLIE_AGENT_ENV_") || value === undefined) continue;
+    agentEnv.set(name.slice("FOLIE_AGENT_ENV_".length), value);
   }
+  result.agent_env = [...agentEnv].map(([key, value]) => ({ key, value }));
 
   return result;
 }
@@ -145,9 +162,13 @@ export function getEffectiveConfig(): FolieConfig {
 export function getConfigForDisplay(config: FolieConfig): Record<string, string> {
   return {
     "config_version": String(config.config_version),
-    "kubeconfig_context": config.kubeconfig_context,
+    "execution_profile": config.execution_profile,
+    "execution_profile_note": config.execution_profile === "local"
+      ? "trusted OS process; host filesystem/network access; no CPU/memory limits or sandbox; server crash may orphan workers"
+      : "AX/Kubernetes execution; verify isolation and resource guarantees for the selected deployment",
+    "kubeconfig_context": config.kubeconfig_context ?? "(not set)",
     "operator_token": maskSecret(config.operator_token),
-    "agent_image": config.agent_image,
+    "agent_image": config.agent_image ?? "(not set)",
     "default_model": config.default_model,
     "model_api_key": maskSecret(config.model_api_key),
     "atespace": config.atespace,
@@ -163,13 +184,17 @@ export function getConfigForDisplay(config: FolieConfig): Record<string, string>
 export function validateConfig(config: FolieConfig): string[] {
   const errors: string[] = [];
 
-  if (!config.kubeconfig_context) errors.push("kubeconfig_context is required");
+  if (!["local", "ax"].includes(config.execution_profile))
+    errors.push("execution_profile must be 'local' or 'ax'");
+  if (config.execution_profile === "ax" && !config.kubeconfig_context)
+    errors.push("kubeconfig_context is required for the ax profile");
   if (!config.operator_token) errors.push("operator_token is required");
-  if (!config.agent_image) errors.push("agent_image is required");
+  if (config.execution_profile === "ax" && !config.agent_image)
+    errors.push("agent_image is required for the ax profile");
   if (!config.default_model) errors.push("default_model is required");
   if (!config.model_api_key) errors.push("model_api_key is required");
   if (!config.atespace) errors.push("atespace is required");
-  if (!["pi", "echo"].includes(config.agent_runtime)) errors.push("agent_runtime must be 'pi' or 'echo'");
+  if (!("strands pi echo".split(" ") as string[]).includes(config.agent_runtime)) errors.push("agent_runtime must be 'strands', 'pi', or 'echo'");
   if (config.server_port < 1 || config.server_port > 65535) errors.push("server_port must be 1-65535");
   if (config.reconcile_ms < 100) errors.push("reconcile_ms must be >= 100");
 
@@ -197,13 +222,20 @@ function parseYaml(content: string): Record<string, unknown> | null {
     const commentIndex = value.indexOf(' #');
     if (commentIndex !== -1) value = value.slice(0, commentIndex).trim();
 
-    // Handle arrays (agent_env)
+    // Handle flat arrays and the `KEY=value` agent environment entries.
     if (value.startsWith('[') && value.endsWith(']')) {
       const inner = value.slice(1, -1).trim();
       if (!inner) {
         result[key] = [];
       } else {
-        result[key] = inner.split(',').map(s => s.trim()).filter(Boolean);
+        const items = splitArrayItems(inner).map(parseStringValue);
+        result[key] = key === "agent_env"
+          ? items.map((item) => {
+              const separator = item.indexOf("=");
+              if (separator <= 0) throw new Error("agent_env entries must be KEY=value");
+              return { key: item.slice(0, separator), value: item.slice(separator + 1) };
+            })
+          : items;
       }
       continue;
     }
@@ -230,9 +262,13 @@ function stringifyYaml(obj: Record<string, unknown>): string {
   const lines: string[] = [];
 
   for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined) continue;
     if (Array.isArray(value)) {
       if (value.length === 0) {
         lines.push(`${key}: []`);
+      } else if (key === "agent_env") {
+        const entries = value as AgentEnvEntry[];
+        lines.push(`agent_env: [${entries.map((entry) => JSON.stringify(`${entry.key}=${entry.value}`)).join(", ")}]`);
       } else {
         lines.push(`${key}: [${value.map(v => stringifyValue(v)).join(", ")}]`);
       }
@@ -252,4 +288,41 @@ function stringifyValue(value: unknown): string {
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (value === null) return 'null';
   return String(value);
+}
+
+function splitArrayItems(value: string): string[] {
+  const items: string[] = [];
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') quoted = !quoted;
+    else if (char === "," && !quoted) {
+      items.push(value.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  items.push(value.slice(start).trim());
+  return items.filter(Boolean);
+}
+
+function parseStringValue(value: string): string {
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try {
+      return JSON.parse(value) as string;
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1);
+  return value;
 }

@@ -96,7 +96,9 @@ const toUsage = (r: Row): SessionUsage | null =>
     : {
         promptTokens: r.prompt_tokens as number,
         completionTokens: r.completion_tokens as number,
-        costUsd: r.cost_usd as number,
+        ...(r.cost_usd === null || r.cost_usd === undefined
+          ? {}
+          : { costUsd: r.cost_usd as number }),
         toolCalls: r.tool_calls as number,
         toolFailures: r.tool_failures as number,
       };
@@ -395,6 +397,17 @@ const reports = (q: Queryable): ReportRepo => ({
       ],
     );
     return toReport(rows[0]!);
+  },
+  async getBySession(sessionId) {
+    const { rows } = await q.query(
+      `SELECT ${REPORT_COLS}
+       FROM reports r JOIN sessions s ON s.id = r.session_id
+       WHERE s.id = $1
+       ORDER BY r.id
+       LIMIT 1`,
+      [sessionId],
+    );
+    return rows[0] ? toReport(rows[0]) : null;
   },
   async list({ agent, limit }) {
     const { rows } = await q.query(
@@ -704,11 +717,11 @@ const sessions = (q: Queryable): SessionRepo => ({
     );
     return rows[0] ? toSession(rows[0]) : null;
   },
-  async settle(id, outcome) {
+  async settle(id, outcome, messageIds) {
     const { rows } = await q.query(
-      `UPDATE sessions SET state = 'settled', outcome = $2, ended_at = now()
+      `UPDATE sessions SET state = 'settled', outcome = $2, ended_at = now(), message_ids = $3::int[]
        WHERE id = $1 AND state = 'running' RETURNING ${SESSION_COLS}`,
-      [id, outcome],
+      [id, outcome, messageIds],
     );
     return rows[0] ? toSession(rows[0]) : null;
   },

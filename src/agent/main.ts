@@ -26,7 +26,7 @@ const telemetry = createTelemetry({
 const runtime = await createRuntime(
   {
     agentName: name,
-    runtime: env.FOLIE_RUNTIME ?? "pi",
+    runtime: env.FOLIE_RUNTIME ?? "strands",
     model: env.FOLIE_MODEL ?? "anthropic/claude-sonnet-4-6",
     workdir: env.FOLIE_WORKDIR ?? "/workspace",
   },
@@ -35,7 +35,7 @@ const runtime = await createRuntime(
 
 const stop = new AbortController();
 process.on("SIGTERM", () => stop.abort());
-console.log(`folie-agent ${name} up (runtime=${env.FOLIE_RUNTIME ?? "pi"})`);
+console.log(`folie-agent ${name} up (runtime=${env.FOLIE_RUNTIME ?? "strands"})`);
 const loop = new AgentLoop(name, server, runtime, {
   tracer: telemetry.tracer,
   flush: () => telemetry.forceFlush(),

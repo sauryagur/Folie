@@ -1,5 +1,13 @@
 // Wire and domain types shared by folie-server, the agent program and the CLI.
 
+export const MAX_ARTIFACT_UPLOAD_BYTES = 32 * 1024 * 1024;
+
+export interface ArtifactUploadResult {
+  sha256: string;
+  ref: string;
+  bytes: number;
+}
+
 export type Outcome = "done" | "failed";
 export type WorkItemState =
   "queued" | "assigned" | "blocked" | "done" | "failed";
@@ -71,7 +79,8 @@ export type SendResult = Message & { duplicate?: boolean };
 export interface SessionUsage {
   promptTokens: number;
   completionTokens: number;
-  costUsd: number;
+  /** Omit when the selected model provider does not report a reliable price. */
+  costUsd?: number;
   toolCalls: number;
   toolFailures: number;
 }

@@ -1,43 +1,73 @@
 # Handoff
 
-## Goal
+## Active goal
 
-Continue implementing Folie against [`spec/requirements.md`](spec/requirements.md). It is the normative spec; [`DESIGN.md`](DESIGN.md) is the architectural overview. Do not recreate a phased roadmap; the user explicitly requested one spec that must be met. (The implementation code has since changed — trust the "Current state" section below, not any earlier version of this file.)
+Build Folie as a small, adaptable agent runtime through coherent end-to-end iterations. The first target is a usable local-first research application; later work should add reusable composition primitives, optional AX/Substrate execution, and a second application only when the first path is reproducible. Complexity must earn its maintenance cost.
 
-## Current state (as of 2026-11-07, commit `ebc9287` + uncommitted latency metrics)
+The working plan and its evidence gates are in [`docs/architecture/build-plan.md`](docs/architecture/build-plan.md). Follow the root [`AGENTS.md`](AGENTS.md), especially its instruction to preserve code that fits and to treat the old specs/ADRs/E1–E6 queue as historical. Read [`DESIGN.md`](DESIGN.md) and [`docs/architecture/README.md`](docs/architecture/README.md) for the current proposal. The proposal is not proof that a behavior is implemented.
 
-- The architecture/spec/ADR documents were rewritten for a general-purpose autonomous swarm. Read `DESIGN.md` first, then the requirements relevant to the code being changed.
-- **Implemented and verified**: authenticated identity (R-1.1–R-1.5); persisted sessions (R-3.2); ExecutionRegistry (R-6.2/6.3); task claims (R-8.2, single conditional claim, fence-checked start/submit); budgets (R-13.1/13.2, headroom carve-outs, E0/E1); verification (R-11.1–11.3, independent verdicts, submitted→verified aggregation, goal evaluation from verified coverage); cancellation (R-2.4/R-2.5, durable control signals, cooperative shim); cheap enforcement (R-6.7 `spec.debug:false`, R-6.11 default `ResourcesSpec` 500m/512Mi); gateway E2 (ADR 0007, credential scrubbing, budget reserve/commit); scoped memory + content-addressed artifacts (ADR 0008, R-4.1/4.2/4.4); teams + capabilities (R-9.5 contracts-only, R-10.1/10.2 levels/risk gates); leader election (R-6.6, single-row lease); event ledger (ADR 0004, 16 event types in the same transaction, `GET /v1/stream` SSE with Last-Event-ID); OTel metrics catalog (R-15.4, no ids as labels, incl. `task.claim.latency` + `task.time_to_verified` via task timestamps); TUI Inspector/Alerts/Budgets views + `cancel`/`pause`/`resume` CLI parity (R-15.6).
-- D6 closed, D8 partially closed in [`architecture/current-system.md`](architecture/current-system.md#verified-discrepancies).
-- Last full check: `bunx vitest run --maxWorkers=2` (470 passed, 11 skipped at `95695d6`; 475 passed at `ebc9287`), `bunx tsc -p .` clean. No cluster/live-provider check was run in the review.
-- Working tree: latency-metric timestamps (tasks `claimed_at`/`submitted_at`/`verified_at`) + `docs/e1-e6-close-out.md` uncommitted.
-- **E1–E6 are not met.** No live run recorded. See [`docs/e1-e6-close-out.md`](docs/e1-e6-close-out.md) for per-demonstration preconditions and gaps (sweeper, revoke/pause, verifier adapter, contributor path, adversarial suite, baselines).
+## Current checkout
 
-## Next slice (priority order)
+- Branch: `build/local-runtime`.
+- Worktree is intentionally dirty and contains the current implementation attempt plus earlier architecture-reset context edits. Do not reset or discard it. No commit has been made.
+- The previous active goal was explicitly paused by the user. The latest instruction was to prioritize this handoff document; continue project implementation only when the user resumes/requests it.
+- Latest verification in this worktree: full `vitest run` (506 passed, 11 skipped), `tsc --noEmit`, and the focused checks listed below.
 
-1. **Sweeper + revoke/pause (E2/E4 gate)**: lease-expiry sweeper (R-8.4), claim revoke with fence bump (R-8.3), goal pause (R-7.3). Highest leverage: unblocks fenced recovery and oversight.
-2. **Deterministic verifier adapter + retry** (R-11.4, E3 gate): code-running checks in a separate execution from an immutable snapshot; findings attached to next attempt.
-3. **Contributor path + discovery** (R-8.10, E1 gate): `addContributor` with per-artifact attribution; indexed pull for tasks/goals (R-9.2).
-4. **Adversarial governance suite** (R-1.4/R-12, E5 gate): five denial attacks denied + recorded; gateway tool-list gating (R-10.4).
-5. **Baselines harness** (E6 gate): single-agent / manager-worker / centrally-planned on held-out goals, measured from ledger + DB (R-15.7).
-6. **Live runs** (E1–E6): recorded, failures included. Only then is the spec met. See [`docs/e1-e6-close-out.md`](docs/e1-e6-close-out.md).
+## Implemented in the current worktree
 
-Also: Substrate grant narrowing (global bootstrap owner → atespace-scoped editor) and Substrate #2086 owner/re-test cadence are deployment risks with names and dates, not paragraphs — track them until they land.
+### Local profile and setup
 
-## Code map to inspect
+- New config defaults to `execution_profile: local`; version-1 config loads as AX to preserve existing behavior. Config init no longer requires a running server and only asks for Kubernetes/image values for AX.
+- `folie up` / `folie down` dispatch by profile. Local mode starts the server with file-backed PGlite, logs, and workspaces under `FOLIE_HOME/local`, waits for `/healthz`, and records a PID/process identity. Stop checks identity before signaling and preserves database/workspaces. Local CLI requests use loopback; local server binds `127.0.0.1`.
+- AX setup remains selectable, and legacy v1 configs retain AX. No live AX/Substrate deployment was checked.
+- Local trust limits are shown on startup: workers run as the operator with host filesystem/network access, no enforced CPU/memory limits, in-memory process tracking, possible orphaning on abrupt server crash, and no suspension on Windows. This is trusted execution, not a sandbox.
 
-- API and identity enforcement: `src/server/http.ts`, `src/server/service.ts`, `src/server/errors.ts`, `src/server/ops.ts`.
-- Persistence: `src/server/store.ts`, `src/server/pg-store.ts`, `src/server/schema.ts`.
-- Execution credentials: `src/server/controller.ts`, `src/server/config.ts`, `src/server/main.ts`, `src/agent/main.ts`.
-- API callers: `src/shared/client.ts`, `src/cli.ts`, `src/tui/run.ts`, `src/host/cluster.ts`, deployment manifests.
-- Tests and fixtures: `test/server/http.test.ts`, `test/server/service.test.ts`, `test/server/controller.test.ts`, `test/server/service.task-claims.test.ts`, `test/server/service.budgets.test.ts`, `test/server/service.verification.test.ts`, `test/slice.test.ts`, `test/e2e.test.ts`, `test/support/cluster.ts`, `test/support/fakes.ts`.
+### Persistence, sessions, artifacts, and execution
 
-Before changing an exported port or constructor, find every caller and update them together. Preserve useful existing APIs only where the target spec requires them; no compatibility shim for unauthenticated identity.
+- Added a PGlite adapter behind the existing PostgreSQL-shaped `Database` port and promoted PGlite to runtime dependency. It uses a persistent directory with restrictive permissions. The adapter documents one owner process per directory.
+- The agent loop now asks the server to create/lease a persisted session before running, keys transcript events and reports to that server session, and submits the report with the session ID. Report settlement is retry-idempotent for an identical settled-session payload. On settle, `sessions.message_ids` is updated to the full consumed set (mid-session steer mail included), so `workItem`/`report` views match what was acked (`src/server/service.ts`, `src/server/pg-store.ts`).
+- Added authenticated bounded artifact upload. Producer identity is derived from the bearer principal; uploads go to the existing content-addressed artifact table. The Pi artifact tool uploads bytes and emits the stored ref/hash.
+- Added a local `ExecutionProvider` implementation and profile selection in server startup. The local provider runs trusted child processes in persistent per-agent workspaces and supports POSIX suspend/resume, but execution registry/process ownership remains in memory and workers cannot be reattached after server restart.
 
-## Migration risk
+### Strands research runtime
 
-AX tasks are immutable. Existing agent tasks have no bearer token; recreating a task deletes its `/workspace`. Do not silently delete or recreate existing tasks or claim workspace data is preserved. If a live deployment contains workspace data that would be destroyed, stop before destructive migration and surface that risk for an explicit operator decision. No such live deployment was inspected during the documentation work.
+- The narrow isolated Strands TypeScript SDK spike passed under Node 26 and Bun 1.4 with a fake model: typed tools, stream events, async `afterModelCall` inbox correction, and `AbortSignal` cancellation. Its source is in `/tmp/folie-strands-spike` in this development environment; it is not checked into the repository.
+- Based on that gate, `@strands-agents/sdk@1.24.0`, Zod, and a compatible OpenAI SDK peer were added. New configs default to `strands`; Pi and Echo remain selectable. The factory currently configures Strands for OpenRouter Chat Completions.
+- [`src/agent/runtimes/strands.ts`](src/agent/runtimes/strands.ts) adds a transient Strands agent with workspace read, artifact write/upload, and report-submit tools; sequential tool execution; Folie inbox steering; Folie transcript/tool events; and cancellation wiring. It leaves session/memory persistence and authorization with Folie. Provider-neutral Strands usage records token/tool counts and omits unknown dollar cost.
+- The Strands spike did **not** run against live OpenRouter or Folie's actual HTTP client. The production adapter has focused unit tests (`test/agent/strands-runtime.test.ts`) but no Strands HTTP e2e in `test/e2e.test.ts` (Pi/Echo only).
 
-## Acceptance for the head of the queue (sweeper + revoke/pause)
+## Verification completed
 
-Add behavior tests proving: expired leases are reclaimed with a higher fence and stale-holder submits are rejected (R-8.4/R-8.3); pause stops new claims immediately (R-7.3); revoke bumps fence and revokes. Then run `bunx vitest run --maxWorkers=2` and `bunx tsc -p .`. Do not report live AX or Substrate verification unless actually run.
+- `./node_modules/.bin/tsc -p . --noEmit` passes on the current tree.
+- Full suite: `./node_modules/.bin/vitest run` — **506 passed, 11 skipped** (49 files; Bun-only TUI app tests among the skips).
+- `git diff --check` passed (when last run).
+- Persisted-session settlement: mid-session consumed message ids appear on reports after settle (regression covered in `test/e2e.test.ts` steering case).
+- File-backed PGlite gate (partial): `test/server/pglite-persistence.test.ts` — migrate, parallel inserts, close, reopen, remigrate, rows intact.
+- Deterministic local lifecycle (partial): `test/local-lifecycle.test.ts` with `test/support/local-stack.ts` — temp `FOLIE_HOME`, file-backed PGlite, local HTTP + echo child agents; work item/report survive server stop and restart. Does **not** exercise `folie config init`, `folie up`/`down` CLI, or Strands.
+- Focused Strands adapter tests (`test/agent/strands-runtime.test.ts`): report_submit mapping, workspace/artifact tools, inbox steering, tool replay flags, and pre-run cancellation.
+- Authenticated artifact retrieval: HTTP/CLI (`test/server/http.test.ts`) and TUI inspector fetch (`[d]` / `artifact` command).
+- **Not run / still open:** concurrency/load PGlite stress, crash-kill recovery, clean-install packaging from empty `node_modules`, PostgreSQL logical export/import, OpenRouter live smoke, steer-while-running Strands on local stack.
+
+## Highest-priority next work
+
+Continue the **same first product iteration**; do not begin the optional AX profile or coding application yet.
+
+1. ~~Inspect the full diff and fix integration issues; add focused Strands/session tests~~ **largely done:** full vitest green; Strands adapter + persisted-session + loop/e2e steering coverage; settle persists full `message_ids`. Remaining: occasional re-run after large diffs; Strands HTTP e2e still absent.
+2. Verify a clean local setup flow (`config init` → `up` → submit → inspect → `down`) on a clean temporary home. **partial:** `test/local-lifecycle.test.ts` proves restart persistence for echo/local PGlite stack; still need CLI `up`/`down` path, transcript/history inspection assertions, steer-while-running Strands, and optional OpenRouter smoke (credentials only).
+3. ~~Artifact retrieval surface~~ **done:** `GET /v1/artifacts?ref=…` + `folie artifact` + TUI inspector (`[d]` / `artifact` command via `fetchArtifact`).
+4. Finish the PGlite gate before calling it a supported default. **partial:** `test/server/pglite-persistence.test.ts` covers file-backed close/reopen + remigrate; still open: production-shaped transactions/concurrency under load, abrupt crash recovery, resource metrics, clean Bun/Node packaging, logical PostgreSQL export/import. Until closed, describe PGlite as provisional for local mode.
+5. Update the architecture/build-plan evidence status and this handoff when these checks change. Keep AX/Substrate explicitly optional and unverified until run against a live deployment.
+
+## Important limitations and open edges
+
+- A lost response to session creation is idempotent only when the same `clientRequestId` is retried; the loop currently does not persist/reuse that request ID if the process exits between server commit and receiving the response. Leased messages may then need recovery work.
+- A local server crash can leave workers running without an owner; server restart does not reattach them. `down` only stops workers tracked by the current server process during orderly shutdown.
+- Artifact bytes are retrievable via authenticated `GET /v1/artifacts?ref=…`, `folie artifact`, and the TUI inspector (`[d]` or `artifact <ref>`).
+- PGlite is single-owner local persistence. Do not share a data directory between server processes or present it as multi-host/high-availability storage.
+- Strands tools use Zod while existing Pi tools use TypeBox. Do not create a generic schema framework until app composition demonstrates that need. Tool cancellation is cooperative.
+- The Strands adapter currently supports research-oriented workspace/artifact/report tools; it is not the repository-editing application. Pi remains in the dependency tree and is still selectable; reassess the cost of keeping it after the first app is validated.
+- No claim of AX/Substrate isolation, local resource enforcement, benchmark performance, or live model behavior is established by the checks above.
+
+## Historical material
+
+`spec/`, `decisions/`, and most pages under `architecture/` describe the previous target. Their old normative requirements, ADRs, E1–E6 gates, and implementation queue are not active coding instructions unless explicitly requested. [`architecture/current-system.md`](architecture/current-system.md) is a dated as-built snapshot; inspect current code before relying on it. `docs/research/folie-architecture-reset-draft.md` is superseded by `docs/architecture/`.

@@ -8,7 +8,7 @@ Status: proposed with the architecture reset, 2026-11-12.
 
 One operator, one machine, one Folie server, one store, and a local worker executor. Starting Folie must not require kind, Kubernetes, AX, Substrate, PostgreSQL as a separately operated service, or a message broker.
 
-The default's trust boundary must be explicit. A local process running as the user is trusted local execution, not a sandbox. If the product wants a safer local default, it must provide real OS/container isolation rather than implying that configuration or tool grants contain a process.
+The default's trust boundary must be explicit. A local process running as the user is trusted local execution, not a sandbox: it has host filesystem and network access and Folie cannot enforce CPU or memory limits. The current process registry is in memory, so an abrupt server crash may leave a worker running without Folie being able to reattach to it; local suspension is unavailable on Windows. State these limits in setup and operator output. If the product wants a safer local default, it must provide real OS/container isolation rather than implying that configuration or tool grants contain a process.
 
 ### `ax` — first-class optional execution profile
 

@@ -16,9 +16,32 @@ export async function createRuntime(
   server: SwarmServer,
 ): Promise<Runtime> {
   if (env.runtime === "echo") return echoRuntime;
+  if (env.runtime === "strands") {
+    const [provider, ...modelIdParts] = env.model.split("/");
+    const modelId = modelIdParts.join("/");
+    if (provider !== "openrouter" || !modelId)
+      throw new Error(
+        `Strands currently requires FOLIE_MODEL "openrouter/<model id>", got ${JSON.stringify(env.model)}`,
+      );
+    const [{ OpenAIModel }, { StrandsRuntime }] = await Promise.all([
+      import("@strands-agents/sdk/models/openai"),
+      import("./strands"),
+    ]);
+    return new StrandsRuntime({
+      agentName: env.agentName,
+      model: new OpenAIModel({
+        api: "chat",
+        modelId,
+        apiKey: process.env.OPENROUTER_API_KEY,
+        clientConfig: { baseURL: "https://openrouter.ai/api/v1" },
+      }),
+      workdir: env.workdir,
+      server,
+    });
+  }
   if (env.runtime !== "pi")
     throw new Error(
-      `unknown FOLIE_RUNTIME ${JSON.stringify(env.runtime)} (pi|echo)`,
+      `unknown FOLIE_RUNTIME ${JSON.stringify(env.runtime)} (strands|pi|echo)`,
     );
 
   const [{ builtinModels }, { createCodingTools }, { PiRuntime }] =

@@ -108,6 +108,20 @@ describe("parseCommand", () => {
     expect(parse("view")).toMatchObject({ kind: "error" });
   });
 
+  it("artifact needs a ref and accepts --out", () => {
+    expect(parse("artifact ref:abc")).toEqual({
+      kind: "artifact",
+      ref: "ref:abc",
+      out: undefined,
+    });
+    expect(parse("artifact ref:abc --out /tmp/x")).toEqual({
+      kind: "artifact",
+      ref: "ref:abc",
+      out: "/tmp/x",
+    });
+    expect(parse("artifact")).toMatchObject({ kind: "error" });
+  });
+
   it("help, quit and their aliases", () => {
     expect(parse("help")).toEqual({ kind: "help" });
     expect(parse("?")).toEqual({ kind: "help" });
@@ -184,6 +198,16 @@ describe("execute", () => {
         calls.push(`cancel ${agent} ${reason}`),
         { cursor: 7 }
       ),
+      fetchArtifact: async (ref) => {
+        calls.push(`artifact ${ref}`);
+        return {
+          bytes: new Uint8Array([1, 2, 3]),
+          mediaType: "text/plain",
+          ref: "ref:stored",
+          sha256: "deadbeef",
+          name: "out.txt",
+        };
+      },
     };
     return { api, calls };
   }
@@ -238,5 +262,21 @@ describe("execute", () => {
       await execute({ kind: "cancel", agent: "a", reason: "why" }, api),
     ).toBe("cancel queued for a (cursor 7)");
     expect(calls).toEqual(["cancel a why"]);
+  });
+
+  it("artifact fetches bytes and writes the default name", async () => {
+    const { api, calls } = fakeApi();
+    const dir = await import("node:os").then((os) => os.tmpdir());
+    const dest = `${dir}/folie-tui-artifact-${Date.now()}.bin`;
+    expect(
+      await execute(
+        { kind: "artifact", ref: "ref:abc", out: dest },
+        api,
+      ),
+    ).toMatch(/^wrote 3 bytes to /);
+    expect(calls).toEqual(["artifact ref:abc"]);
+    const { readFile, unlink } = await import("node:fs/promises");
+    expect([...((await readFile(dest)))]).toEqual([1, 2, 3]);
+    await unlink(dest);
   });
 });

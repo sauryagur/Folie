@@ -527,6 +527,7 @@ export interface InspectorArtifact {
   path: string;
   bytes: number | null;
   sha256: string | null;
+  ref: string | null;
   description: string | null;
 }
 export interface InspectorLog {
@@ -775,6 +776,7 @@ export function buildInspector(
         path: dstr(d, "path") ?? "(unknown path)",
         bytes: dnum(d, "bytes"),
         sha256: dstr(d, "sha256"),
+        ref: dstr(d, "ref"),
         description: dstr(d, "description"),
       });
     } else if (e.type === "log") {
@@ -819,6 +821,17 @@ export function buildInspector(
     totalCostUsd: hasCost ? totalCost : null,
   };
 }
+
+/** Ref accepted by GET /v1/artifacts?ref=, from stored ref or bare sha256. */
+export const artifactRef = (a: InspectorArtifact): string | null =>
+  a.ref ?? a.sha256 ?? null;
+export const lastArtifact = (i: InspectorModel): InspectorArtifact | null =>
+  i.artifacts.length ? i.artifacts[i.artifacts.length - 1]! : null;
+export const artifactOutPath = (
+  a: InspectorArtifact,
+  fetchedName: string,
+): string =>
+  a.path !== "(unknown path)" ? a.path : fetchedName || "artifact";
 
 /** The exact string a user copies to open the trace; null when no event carries one yet. */
 export const copyTraceId = (i: InspectorModel): string | null => i.traceId;
@@ -887,14 +900,15 @@ export function inspectorLines(i: InspectorModel): string[] {
     );
   lines.push(`artifacts (${i.artifacts.length})`);
   for (const a of i.artifacts) {
+    const r = artifactRef(a);
     lines.push(
-      `  ▣ artifact: ${a.path}  bytes=${a.bytes ?? "unknown"}  sha=${a.sha256 ? a.sha256.slice(0, 12) : "unknown"}${a.description ? `  ${a.description}` : ""}`,
+      `  ▣ artifact: ${a.path}  bytes=${a.bytes ?? "unknown"}  ref=${r ? r.slice(0, 20) : "unknown"}  sha=${a.sha256 ? a.sha256.slice(0, 12) : "unknown"}${a.description ? `  ${a.description}` : ""}`,
     );
   }
   for (const l of i.logs.slice(-8))
     lines.push(`  ${l.level === "error" ? "✗" : "●"} log: ${l.line}`);
   lines.push(
-    "actions: [c] copy trace_id · [t] open trace · cancel session: `cancel session` (command-only, confirm required)",
+    "actions: [c] copy trace_id · [t] open trace · [d] save latest artifact · artifact <ref> [--out file] · cancel session: `cancel session` (command-only, confirm required)",
   );
   return lines;
 }

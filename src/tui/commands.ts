@@ -10,6 +10,7 @@ export type Command =
   | { kind: "subscribe" | "unsubscribe"; topic: string; agent: string }
   | { kind: "op"; op: AgentOp; agent: string }
   | { kind: "cancel"; agent: string; reason: string }
+  | { kind: "artifact"; ref: string; out?: string }
   | { kind: "view"; view: View }
   | { kind: "help" }
   | { kind: "quit" };
@@ -17,7 +18,7 @@ export type Command =
 export type Parsed = Command | { kind: "error"; message: string };
 
 export const HELP =
-  "submit [@agent] <goal> | send [@agent] <text> | publish <topic> <text> | subscribe|unsubscribe <topic> [agent] | suspend|resume|delete [agent] | cancel <agent> [reason] | view <stream|inbox|topics|reports> | quit";
+  "submit [@agent] <goal> | send [@agent] <text> | publish <topic> <text> | subscribe|unsubscribe <topic> [agent] | suspend|resume|delete [agent] | cancel <agent> [reason] | artifact <ref> [--out file] | view <stream|inbox|topics|reports> | quit";
 
 const err = (message: string): Parsed => ({ kind: "error", message });
 
@@ -98,6 +99,18 @@ export function parseCommand(input: string, selected: string | null): Parsed {
         ? { kind: "view", view: v }
         : err(`usage: view <${VIEWS.join("|")}>`);
     }
+    case "artifact": {
+      let out: string | undefined;
+      const rest: string[] = [];
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === "--out" && args[i + 1]) out = args[++i];
+        else rest.push(args[i]!);
+      }
+      const ref = rest.join(" ").trim();
+      return ref
+        ? { kind: "artifact", ref, out }
+        : err("usage: artifact <ref> [--out <file>]");
+    }
     default:
       return err(`unknown command "${verb}" (help lists them)`);
   }
@@ -112,6 +125,7 @@ export type CommandApi = Pick<
   | "unsubscribe"
   | "agentOp"
   | "queueCancel"
+  | "fetchArtifact"
 >;
 
 /** Runs a server-side command and returns the one-line result to show. Throws on server errors. */
@@ -153,6 +167,13 @@ export async function execute(
     case "cancel": {
       const { cursor } = await api.queueCancel(cmd.agent, cmd.reason);
       return `cancel queued for ${cmd.agent} (cursor ${cursor})`;
+    }
+    case "artifact": {
+      const { writeFile } = await import("node:fs/promises");
+      const got = await api.fetchArtifact(cmd.ref);
+      const dest = cmd.out ?? (got.name || "artifact");
+      await writeFile(dest, got.bytes);
+      return `wrote ${got.bytes.byteLength} bytes to ${dest} (${got.ref})`;
     }
   }
 }

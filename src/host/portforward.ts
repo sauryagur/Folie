@@ -2,6 +2,7 @@
 import { BIN, CONTEXT, HOME, KUBECONFIG, NS } from "./env";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { getEffectiveConfig } from "../config";
 
 export function operatorTokenFromEnvOrFile(
   env = process.env,
@@ -35,13 +36,17 @@ export async function withServerUrl<T>(
     return fn(process.env.FOLIE_SERVER_URL);
   }
 
+  const config = getEffectiveConfig();
+  if (config.execution_profile === "local")
+    return fn(`http://127.0.0.1:${config.server_port}`);
+
   const pf = Bun.spawn(
     [
       `${BIN}/kubectl`,
       "--kubeconfig",
       KUBECONFIG,
       "--context",
-      CONTEXT,
+      config.kubeconfig_context ?? CONTEXT,
       "-n",
       NS,
       "port-forward",

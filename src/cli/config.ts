@@ -8,6 +8,7 @@ import {
   loadConfig,
   saveConfig,
   createDefaultConfig,
+  getConfigPath,
   getEffectiveConfig,
   getConfigForDisplay,
   validateConfig,
@@ -61,18 +62,26 @@ export async function configCommand(
 
         console.log("Welcome to Folie! Let's set up your environment.\n");
 
-        // Kubernetes context
-        const contexts = await listKubeContexts();
-        const kubeconfig_context = contexts.length > 0
-          ? (await selectFromList(rl, "Kubernetes context:", contexts, c => c)) || "kind-folie"
-          : "kind-folie";
+        const execution_profile = await selectFromList(
+          rl,
+          "Execution profile (local runs trusted processes as your user; AX uses Kubernetes):",
+          ["local", "ax"],
+          (profile) => profile,
+        ) as "local" | "ax";
+
+        let kubeconfig_context: string | undefined;
+        let agent_image: string | undefined;
+        if (execution_profile === "ax") {
+          const contexts = await listKubeContexts();
+          kubeconfig_context = contexts.length > 0
+            ? (await selectFromList(rl, "Kubernetes context:", contexts, c => c)) || "kind-folie"
+            : "kind-folie";
+          agent_image = await prompt(rl, "Agent image:", "localhost:5001/folie-agent:dev");
+        }
 
         // Operator token
         const tokenChoice = await rl.question("Operator token: [generate] ");
         const operator_token = tokenChoice.trim() || randomBytes(32).toString("base64url");
-
-        // Agent image
-        const agent_image = await prompt(rl, "Agent image:", "localhost:5001/folie-agent:dev");
 
         // Default model
         const default_model = await prompt(rl, "Default model:", "openrouter/deepseek/deepseek-chat");
@@ -84,7 +93,7 @@ export async function configCommand(
         const atespace = await prompt(rl, "Default atespace:", "folie");
 
         // Agent runtime
-        const runtime = await selectFromList(rl, "Agent runtime:", ["pi", "echo"], r => r) || "pi";
+        const runtime = await selectFromList(rl, "Agent runtime:", ["strands", "pi", "echo"], r => r) || "strands";
 
         // Server port
         const server_port = parseInt(await prompt(rl, "Server port:", "8080"), 10);
@@ -93,14 +102,15 @@ export async function configCommand(
         const reconcile_ms = parseInt(await prompt(rl, "Reconcile interval (ms):", "2000"), 10);
 
         const config = {
-          config_version: 1,
+          config_version: 2,
+          execution_profile,
           kubeconfig_context,
           operator_token,
           agent_image,
           default_model,
           model_api_key,
-          atespace: "folie",
-          agent_runtime: runtime as "pi" | "echo",
+          atespace,
+          agent_runtime: runtime as "strands" | "pi" | "echo",
           agent_env: [],
           server_port,
           reconcile_ms,
@@ -115,7 +125,7 @@ export async function configCommand(
 
         const { saveConfig } = await import("../config");
         saveConfig(config);
-        console.log(`\nConfig written to ${require("../config").getConfigPath()}`);
+        console.log(`\nConfig written to ${getConfigPath()}`);
         return 0;
       }
 

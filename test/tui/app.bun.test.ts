@@ -87,6 +87,16 @@ describe.skipIf(!process.versions.bun)("TUI app", () => {
       calls.push(`cancel ${agent} ${reason}`),
       { cursor: 1 }
     ),
+    fetchArtifact: async (ref) => (
+      calls.push(`fetch ${ref}`),
+      {
+        bytes: new Uint8Array([0x61]),
+        mediaType: "text/plain",
+        ref,
+        sha256: "",
+        name: "out.txt",
+      }
+    ),
   };
 
   /** Key handlers start promise chains (poll, command). The fakes resolve at once, so draining and painting is enough. */

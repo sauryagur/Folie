@@ -1,4 +1,4 @@
-// `folie up` / `folie down`: the whole laptop world (kind + Substrate + ax + Postgres + folie-server).
+// Explicit AX profile bootstrap: the whole cluster world (kind + Substrate + ax + Postgres + folie-server).
 // Substrate and ax are installed by ax's own hack/setup-e2e-kind.sh; Folie never patches ax.
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir } from "node:fs/promises";
@@ -199,7 +199,7 @@ export async function up() {
   await ensureOperatorTokenSecret();
   await deployServer();
   console.log(
-    `==> up. try: folie submit "say hello"   (kubectl: ${join(BIN, "kubectl")} --kubeconfig ${KUBECONFIG} --context ${CONTEXT})`,
+    `==> AX profile ready. try: folie submit "say hello"   (kubectl: ${join(BIN, "kubectl")} --kubeconfig ${KUBECONFIG} --context ${CONTEXT})`,
   );
 }
 
