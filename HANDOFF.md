@@ -11,6 +11,7 @@ Authoritative process docs: root [`AGENTS.md`](AGENTS.md), proposal [`DESIGN.md`
 - **Branch:** `build/local-runtime`
 - **Worktree:** inspect `git status -sb` before editing and preserve existing changes. `folie/config.yaml` is local configuration; do not stage or share it.
 - **Recent commits (newest first):**
+  - `29593bb` — feat(local): complete Strands CLI operator journey
   - `e846f6a` — test: local Strands steer and cli config typo
   - `a9cb98d` — test(cli): local folie up/down persistence gate
   - `3f916fd` — feat(local): default profile, PGlite, Strands, and artifact fetch
