@@ -114,6 +114,7 @@ const commands: Record<string, Command> = {
   down,
   config: (args) => config(undefined as unknown as Api, args, console.log),
   submit: viaServer(submit),
+  status: viaServer(status),
   artifact: (args) =>
     withServerUrl((url) => artifactGet(operatorClient(url), args, console.log)),
 };

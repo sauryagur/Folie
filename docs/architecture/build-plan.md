@@ -38,14 +38,14 @@ PGlite feasibility is an explicit gate, not an assumed fact. Folie's test fixtur
 
 **Implementation shape:** Reuse the current authenticated HTTP service, work-item flow, session loop, report/output handling, and CLI/TUI surfaces where practical, along with the harness selected by the gate. Add only the local process launcher and research-specific typed tools needed for the application. Keep the model loop in the harness and work authority in Folie. Use a single embedded PGlite instance with file-backed persistence only if the gate below passes; otherwise ship a managed local PostgreSQL path for this iteration and retain the PGlite investigation as open.
 
-**Acceptance evidence (status 2026-11-12):**
+**Acceptance evidence (status 2026-11-13):**
 
-- **Automated suite:** `./node_modules/.bin/vitest run` — **506 passed, 11 skipped**; `./node_modules/.bin/tsc -p . --noEmit` passes. Skips include Bun-only TUI harness tests.
+- **Automated suite:** `./node_modules/.bin/vitest run` — **509 passed, 11 skipped** (re-verify after changes); `./node_modules/.bin/tsc -p . --noEmit` passes. Skips include Bun-only TUI harness tests.
 - **Strands harness (partial):** `@strands-agents/sdk@1.24.0` adapter in-tree; `test/agent/strands-runtime.test.ts` covers report/workspace/artifact tools, inbox steering, replay flags, pre-run cancellation. `test/e2e.test.ts` remains Pi/Echo over HTTP cluster—not Strands. No live OpenRouter smoke.
 - **Sessions and reports (partial):** Persisted sessions lease at start; settlement stores the **full consumed `message_ids`** (including mid-session steer) in `sessions` so operator views match acks (`test/e2e.test.ts` steering case; `test/server/service.persisted-session.test.ts`).
 - **Artifact retrieval (HTTP/CLI/TUI):** `GET /v1/artifacts?ref=…`, `folie artifact`, TUI `[d]` / `artifact` command; covered in `test/server/http.test.ts` and TUI unit tests.
 - **PGlite gate (partial):** `test/server/pglite-persistence.test.ts` — file-backed migrate, writes, close, reopen, remigrate, rows preserved. Still open: concurrent/transaction stress, crash recovery, footprint/latency recording, clean packaging from install, PostgreSQL export/import.
-- **Local lifecycle (partial):** `test/local-lifecycle.test.ts` + `test/support/local-stack.ts` — temp `FOLIE_HOME`, file-backed PGlite, local provider, echo agents; completed work item and report survive server stop/restart. Still open: `folie config init` → `up`/`down` CLI path, full inspect transcript/history after restart, Strands on local stack, steer-under-load.
+- **Local lifecycle (partial):** `test/local-lifecycle.test.ts` + `test/support/local-stack.ts` — in-process stack; `test/cli/local-up-down.test.ts` — real `folie up`/`down` with echo persistence and Strands (`FOLIE_FAKE_TURNS` via `agent_env`) plus `folie config init --defaults`, `folie status`, and transcript persistence across restart. Still open: interactive `config init` in CI, steer-under-load on CLI stack, live model path.
 - **Still open — trust UI / cancel invariants / model smoke:** Local trust limits disclosed at startup; cancel/stale-settlement invariants have deterministic unit/e2e coverage but not the full operator CLI journey or live model verification.
 
 **PGlite local-store gate:**

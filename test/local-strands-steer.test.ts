@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { FolieClient } from "../src/shared/client";
-import { reportTurn, toolTurn } from "./support/strands-fake-model";
+import { reportTurn, textTurn, toolTurn } from "./support/strands-fake-model";
 import { startLocalStack } from "./support/local-stack";
 
 const operatorToken = "local-strands-steer-token";
@@ -42,10 +42,21 @@ async function waitForDone(client: FolieClient, id: number, ms: number) {
   return client.workItem(id);
 }
 
+async function waitForWorkspaceRead(client: FolieClient, scope: string) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const events = await client.readEvents({ scope, type: "tool_end" });
+    if (events.some((event) => event.data?.tool === "workspace_read")) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("timed out waiting for workspace_read to finish");
+}
+
 describe("local Strands steering", () => {
   it("injects human mail mid-session over HTTP and acks it on settle", async () => {
     const turns = [
-      { ...toolTurn("workspace_read", { path: "notes.txt" }), holdMs: 2_000 },
+      toolTurn("workspace_read", { path: "notes.txt" }),
+      { ...textTurn("I will incorporate the correction."), holdMs: 5_000 },
       reportTurn("done", "focused on 2024"),
     ];
     const stack = await startLocalStack(home, port, operatorToken, 250, {
@@ -64,8 +75,8 @@ describe("local Strands steering", () => {
 
       const sendMidTurn = (async () => {
         await stack.tick();
-        // session_start is flushed only at session end; time the send from dispatch instead.
-        await new Promise((r) => setTimeout(r, 700));
+        // Synchronize on the first tool completing so mail cannot join the initial inbox batch.
+        await waitForWorkspaceRead(stack.client, scope);
         await stack.client.send({
           from: "human",
           to: "steered",

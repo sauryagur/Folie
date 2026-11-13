@@ -40,7 +40,7 @@ async function selectFromList(r: readline.Interface, question: string, options: 
 
 export async function configCommand(
   subcmd: string,
-  _args: string[],
+  args: string[],
   _client: unknown
 ): Promise<number> {
   const rl = readline.createInterface({ input: stdinRaw, output: stdout });
@@ -51,6 +51,33 @@ export async function configCommand(
         const { existsSync } = await import("node:fs");
         const { getConfigPath } = await import("../config");
         const configPath = getConfigPath();
+        const defaults = args.includes("--defaults");
+        const force = args.includes("--force");
+
+        if (defaults) {
+          if (existsSync(configPath) && !force) {
+            console.log(
+              `Config already exists at ${configPath} (use --force to overwrite)`,
+            );
+            return 0;
+          }
+          let config = createDefaultConfig();
+          if (process.env.FOLIE_OPERATOR_TOKEN)
+            config.operator_token = process.env.FOLIE_OPERATOR_TOKEN;
+          if (process.env.FOLIE_SERVER_PORT)
+            config.server_port = parseInt(process.env.FOLIE_SERVER_PORT, 10);
+          if (process.env.FOLIE_EXECUTION_PROFILE === "local" || process.env.FOLIE_EXECUTION_PROFILE === "ax")
+            config.execution_profile = process.env.FOLIE_EXECUTION_PROFILE;
+          const errors = validateConfig(config);
+          if (errors.length > 0) {
+            console.error("Validation errors:", errors.join(", "));
+            return 1;
+          }
+          saveConfig(config);
+          console.log(`Config written to ${configPath}`);
+          return 0;
+        }
+
         if (existsSync(configPath)) {
           console.log(`Config already exists at ${configPath}`);
           const overwrite = await rl.question("Overwrite? [y/N]: ");
@@ -116,14 +143,12 @@ export async function configCommand(
           reconcile_ms,
         };
 
-        const { validateConfig } = await import("../config");
         const errors = validateConfig(config);
         if (errors.length > 0) {
           console.error("Validation errors:", errors.join(", "));
           return 1;
         }
 
-        const { saveConfig } = await import("../config");
         saveConfig(config);
         console.log(`\nConfig written to ${getConfigPath()}`);
         return 0;

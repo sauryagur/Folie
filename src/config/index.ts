@@ -194,7 +194,8 @@ export function validateConfig(config: FolieConfig): string[] {
   if (config.execution_profile === "ax" && !config.agent_image)
     errors.push("agent_image is required for the ax profile");
   if (!config.default_model) errors.push("default_model is required");
-  if (!config.model_api_key) errors.push("model_api_key is required");
+  if (!config.model_api_key && config.execution_profile === "ax")
+    errors.push("model_api_key is required for the ax profile");
   if (!config.atespace) errors.push("atespace is required");
   if (!("strands pi echo".split(" ") as string[]).includes(config.agent_runtime)) errors.push("agent_runtime must be 'strands', 'pi', or 'echo'");
   if (config.server_port < 1 || config.server_port > 65535) errors.push("server_port must be 1-65535");
