@@ -1,5 +1,7 @@
 # Runs harness — E1–E6 evidence
 
+> **Historical evidence workflow:** E1–E6 belong to the previous design and are not the active validation plan for the architecture reset proposal. Keep these templates for historical records only unless the user explicitly reopens that design. See [`../architecture/README.md`](../architecture/README.md) for the current proposal.
+
 No E1–E6 has been run (see `../e1-e6-close-out.md`). Every run lands here first, as
 `docs/runs/<date>-e<N>/` — never in a pastebin, never uncommitted. A recording
 that cannot be reproduced is not evidence.

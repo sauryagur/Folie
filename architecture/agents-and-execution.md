@@ -1,6 +1,8 @@
 # Agents, sessions, memory, harnesses and execution
 
-Status: **target architecture**, with today's behaviour marked "today". Authority: [`../DESIGN.md`](../DESIGN.md) §7, §10, §12. Contracts: [`../spec/interfaces.md`](../spec/interfaces.md) §4–5. State: [`../spec/domain-model.md`](../spec/domain-model.md). Behaviour today: [`current-system.md`](current-system.md).
+> **Historical target document:** This page describes the previous design and is retained for migration context. Its requirements and links to the old specs are not current mandates. See the [architecture reset proposal](../docs/architecture/README.md) for the current direction and [as-built snapshot](current-system.md) for implementation notes.
+
+Historical status: target architecture, with behavior at the time marked "today".
 
 The organising rule: **six different things are six different records with six lifecycles.** Today several are one row (`agents.state` is an _execution_ state, `sessions` appears only at report time, memory is files in a sandbox that `DeleteTask` destroys).
 

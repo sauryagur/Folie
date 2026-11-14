@@ -13,15 +13,17 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { context, trace, type Span } from "@opentelemetry/api";
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import type { TSchema } from "typebox";
 import { Type } from "typebox";
 import type { FolieClient } from "../../shared/client";
 import { failSpan } from "../../shared/trace";
-import type { Message, ToolAttempt } from "../../shared/types";
+import {
+  MAX_ARTIFACT_UPLOAD_BYTES,
+  type Message,
+  type ToolAttempt,
+} from "../../shared/types";
 import { instrument, type ToolStats } from "../instrument";
 import { AUTO_REPLAY, RequestIds, attemptNotice } from "../replay";
 import type { Runtime, Session, SessionResult } from "../runtime";
@@ -29,7 +31,12 @@ import type { Runtime, Session, SessionResult } from "../runtime";
 /** The slice of folie-server the swarm tools call. */
 export type SwarmServer = Pick<
   FolieClient,
-  "send" | "subscribe" | "unsubscribe" | "publish" | "attempts"
+  | "send"
+  | "subscribe"
+  | "unsubscribe"
+  | "publish"
+  | "attempts"
+  | "uploadArtifact"
 >;
 
 export interface PiRuntimeDeps {
@@ -74,12 +81,6 @@ const text = (t: string) => ({
   content: [{ type: "text" as const, text: t }],
   details: {},
 });
-
-async function sha256(file: string): Promise<string> {
-  const h = createHash("sha256");
-  for await (const chunk of createReadStream(file)) h.update(chunk as Buffer);
-  return h.digest("hex");
-}
 
 export class PiRuntime implements Runtime {
   constructor(private readonly d: PiRuntimeDeps) {}
@@ -191,15 +192,28 @@ export class PiRuntime implements Runtime {
           )
             throw new Error(`${p.path} is outside ${workdir}`);
           if (!info.isFile()) throw new Error(`${p.path} is not a file`);
-          const digest = await sha256(file);
+          if (info.size > MAX_ARTIFACT_UPLOAD_BYTES)
+            throw new Error(
+              `artifact exceeds ${MAX_ARTIFACT_UPLOAD_BYTES} byte upload limit`,
+            );
+          const bytes = await readFile(file);
+          if (bytes.byteLength > MAX_ARTIFACT_UPLOAD_BYTES)
+            throw new Error(
+              `artifact exceeds ${MAX_ARTIFACT_UPLOAD_BYTES} byte upload limit`,
+            );
+          const artifact = await server.uploadArtifact(bytes, {
+            name: relative(workdir, file),
+            description: p.description,
+          });
           session.events.emit("artifact", {
             path: relative(workdir, file),
-            bytes: info.size,
-            sha256: digest,
+            bytes: artifact.bytes,
+            sha256: artifact.sha256,
+            ref: artifact.ref,
             description: p.description,
           });
           return text(
-            `registered ${relative(workdir, file)} (${info.size} bytes, sha256 ${digest.slice(0, 12)})`,
+            `registered ${relative(workdir, file)} (${artifact.bytes} bytes, sha256 ${artifact.sha256.slice(0, 12)})`,
           );
         },
       }),

@@ -99,15 +99,16 @@ function usageOf(v: unknown): SessionUsage | undefined {
     throw new ValidationError("usage: object required");
   const u = v as Record<string, unknown>;
   if (
-    typeof u.costUsd !== "number" ||
-    !Number.isFinite(u.costUsd) ||
-    u.costUsd < 0
+    u.costUsd !== undefined &&
+    (typeof u.costUsd !== "number" ||
+      !Number.isFinite(u.costUsd) ||
+      u.costUsd < 0)
   )
-    throw new ValidationError("usage.costUsd: non-negative number required");
+    throw new ValidationError("usage.costUsd: non-negative number required when provided");
   return {
     promptTokens: count(u.promptTokens, "promptTokens"),
     completionTokens: count(u.completionTokens, "completionTokens"),
-    costUsd: u.costUsd,
+      ...(typeof u.costUsd === "number" ? { costUsd: u.costUsd } : {}),
     toolCalls: count(u.toolCalls, "toolCalls"),
     toolFailures: count(u.toolFailures, "toolFailures"),
   };
@@ -1372,27 +1373,93 @@ export class SwarmService {
     )
       throw new ValidationError("sessionId: invalid");
 
+    const reportMatches = (report: Report) => {
+      if (
+        report.agent !== agent ||
+        report.outcome !== req.outcome ||
+        report.summary !== summary ||
+        report.messageIds.length !== ids.length ||
+        !report.messageIds.every((id, i) => id === ids[i])
+      )
+        return false;
+      const previousUsage = report.usage ?? null;
+      if (usage === undefined || previousUsage === null)
+        return usage === undefined && previousUsage === null;
+      return (
+        previousUsage.promptTokens === usage.promptTokens &&
+        previousUsage.completionTokens === usage.completionTokens &&
+        previousUsage.costUsd === usage.costUsd &&
+        previousUsage.toolCalls === usage.toolCalls &&
+        previousUsage.toolFailures === usage.toolFailures
+      );
+    };
+
     return withSpan(
       this.obs.tracer,
       "folie.report.settle",
       { attributes: { agent_name: agent, outcome: req.outcome } },
       async (span) => {
-        const { report, acked, itemIds } = await this.store.transaction(
+        const { report, acked, itemIds, duplicate } = await this.store.transaction(
           async (r) => {
-            const acked = await r.messages.ack(agent, ids);
-            if (acked.length !== ids.length)
-              throw new ValidationError(
-                "messageIds: not all are unacked messages of this agent",
-              );
+            const priorSession =
+              namedSessionId === undefined
+                ? null
+                : await r.sessions.get(namedSessionId);
             if (namedSessionId !== undefined) {
-              const s = await r.sessions.get(namedSessionId);
-              if (!s || s.agent !== agent || s.state !== "running")
+              if (!priorSession || priorSession.agent !== agent)
+                throw new ValidationError(
+                  "sessionId: not a session of this agent",
+                );
+              if (priorSession.state === "settled") {
+                const priorReport = await r.reports.getBySession(
+                  namedSessionId,
+                );
+                if (priorReport && reportMatches(priorReport))
+                  return {
+                    report: priorReport,
+                    acked: [],
+                    itemIds: [],
+                    duplicate: true,
+                  };
+                throw new ValidationError(
+                  "sessionId: already settled with a different report",
+                );
+              }
+              if (priorSession.state !== "running")
                 throw new ValidationError(
                   "sessionId: not a running session of this agent",
                 );
+            }
+            const acked = await r.messages.ack(agent, ids);
+            if (acked.length !== ids.length) {
+              // A concurrent identical submit may have committed while this request waited on the message rows.
+              if (namedSessionId !== undefined) {
+                const settled = await r.sessions.get(namedSessionId);
+                const priorReport = await r.reports.getBySession(
+                  namedSessionId,
+                );
+                if (
+                  settled?.agent === agent &&
+                  settled.state === "settled" &&
+                  priorReport &&
+                  reportMatches(priorReport)
+                )
+                  return {
+                    report: priorReport,
+                    acked: [],
+                    itemIds: [],
+                    duplicate: true,
+                  };
+              }
+              throw new ValidationError(
+                "messageIds: not all are unacked messages of this agent",
+              );
+            }
+            if (namedSessionId !== undefined) {
               const settled = await r.sessions.settle(
                 namedSessionId,
                 req.outcome,
+                ids,
               );
               if (!settled)
                 throw new ValidationError(
@@ -1436,9 +1503,11 @@ export class SwarmService {
               traceparent: trace.traceparent,
               tracestate: trace.tracestate,
             });
-            return { report, acked, itemIds };
+            return { report, acked, itemIds, duplicate: false };
           },
         );
+
+        if (duplicate) return report;
 
         if (itemIds.length === 1)
           span.setAttribute("work_item_id", itemIds[0]!);
@@ -1448,7 +1517,9 @@ export class SwarmService {
           span.setAttributes({
             "llm.usage.prompt_tokens": usage.promptTokens,
             "llm.usage.completion_tokens": usage.completionTokens,
-            "llm.usage.cost_usd": usage.costUsd,
+            ...(usage.costUsd === undefined
+              ? {}
+              : { "llm.usage.cost_usd": usage.costUsd }),
             "folie.tool.calls": usage.toolCalls,
             "folie.tool.failures": usage.toolFailures,
           });

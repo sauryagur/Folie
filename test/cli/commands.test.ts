@@ -188,6 +188,30 @@ describe("agents", () => {
     );
     expect(lines[0]).toMatch(/^a\s+running\s+unread=1 wakes=2$/);
   });
+
+  it("shows a failed agent with its reason and how to retry", async () => {
+    const { out, lines } = collect();
+    await agents(
+      {
+        ...fakeApi([]).api,
+        agents: async () => [
+          {
+            name: "a",
+            state: "running",
+            wakeEpoch: 1,
+            unread: 1,
+            lastActiveAt: "",
+            failure: "process exited with code 1: no key",
+          },
+        ],
+      },
+      [],
+      out,
+    );
+    expect(lines).toEqual([
+      `${"a".padEnd(24)} ${"failed".padEnd(10)} unread=1 wakes=1  reason: process exited with code 1: no key (retry: folie resume a)`,
+    ]);
+  });
 });
 
 describe("formatWorkItem", () => {

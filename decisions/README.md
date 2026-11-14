@@ -1,6 +1,8 @@
 # Decisions
 
-Status of everything here: **proposed 2026-11-04** with the swarm evolution of [`../DESIGN.md`](../DESIGN.md), for review. Existing decisions (1–19, recorded in [`../architecture/current-system.md`](../architecture/current-system.md#decisions-at-a-glance)) are carried forward or revised in the first table.
+> **Historical ADR set:** These decisions belong to the previous design and are retained for audit and migration context. The reset proposal in [`../docs/architecture/README.md`](../docs/architecture/README.md) is under review; these ADRs are not current mandates unless reaffirmed in the replacement design.
+
+Historical status: these ADRs were proposed with the previous swarm design on 2026-11-04. They record that design's decisions and revisions; none are carried forward automatically. Reaffirm any decision needed by the current proposal in its replacement specification or ADR.
 
 Format of an ADR: context, options considered, decision, consequences. One file per decision that is expensive to reverse; smaller choices live in the specification with their rationale.
 

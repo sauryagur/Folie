@@ -6,11 +6,15 @@ export const HOME = process.env.FOLIE_HOME ?? join(homedir(), ".folie");
 export const BIN = join(HOME, "bin");
 export const KUBECONFIG = join(HOME, "kubeconfig");
 export const CLUSTER = "folie";
-export const CONTEXT = `kind-${CLUSTER}`;
+export let CONTEXT = process.env.FOLIE_KUBECONFIG_CONTEXT ?? `kind-${CLUSTER}`;
 export const NS = "folie";
 export const REGISTRY = "localhost:5001";
 export const REPO = resolve(import.meta.dirname, "../..");
 export const AX_DIR = resolve(process.env.FOLIE_AX_DIR ?? join(REPO, "../ax"));
+
+export function setKubeContext(context: string): void {
+  CONTEXT = context;
+}
 
 export const env = () => ({
   ...process.env,

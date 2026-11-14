@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPoll,
+  artifactOutPath,
+  artifactRef,
   buildInspector,
   cancelPrompt,
   confirmCancelSession,
   copyTraceId,
   initialState,
+  lastArtifact,
   openTrace,
   requestCancelSession,
   select,
@@ -137,6 +140,7 @@ describe("inspector waterfall", () => {
         path: "out.txt",
         bytes: 42,
         sha256: "abc123",
+        ref: "ref:artifact-1",
         description: "result",
       }),
     ];
@@ -146,7 +150,18 @@ describe("inspector waterfall", () => {
       path: "out.txt",
       bytes: 42,
       sha256: "abc123",
+      ref: "ref:artifact-1",
     });
+    expect(artifactRef(i.artifacts[0]!)).toBe("ref:artifact-1");
+    expect(lastArtifact(i)).toBe(i.artifacts[0]);
+    expect(artifactOutPath(i.artifacts[0]!, "fallback")).toBe("out.txt");
+  });
+
+  it("artifactRef falls back to sha256", () => {
+    const i = buildInspector("agent-1", [
+      ev(1, "artifact", { path: "x", sha256: "ff00" }),
+    ]);
+    expect(artifactRef(i.artifacts[0]!)).toBe("ff00");
   });
 });
 

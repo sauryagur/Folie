@@ -5,15 +5,20 @@ import { Controller } from "./controller";
 import { pgDatabase } from "./db";
 import { httpServer } from "./http";
 import { LeaderElection } from "./leader";
+import { LocalProcessProvider } from "./local-provider";
 import { otlpGateway } from "./otlp-gateway";
 import { pgStore } from "./pg-store";
+import { pgliteDatabase } from "./pglite-db";
 import { migrate } from "./schema";
 import { SwarmService } from "./service";
 import { grpcEgressPolicies } from "./substrate";
 import { createTelemetry } from "../shared/telemetry";
 
 const cfg = loadConfig(process.env);
-const db = pgDatabase(cfg.databaseUrl);
+const db =
+  cfg.executionProfile === "local"
+    ? await pgliteDatabase(cfg.pgliteDataDir)
+    : pgDatabase(cfg.databaseUrl);
 await migrate(db);
 const store = pgStore(db);
 // Persist only the hash of the operator token.
@@ -28,8 +33,14 @@ telemetry.metrics.observeInboxDepth(async () =>
 );
 const service = new SwarmService(store, telemetry);
 
+const localProvider =
+  cfg.executionProfile === "local"
+    ? new LocalProcessProvider({ workspaceRoot: cfg.localWorkspacesDir })
+    : undefined;
+const provider =
+  localProvider ?? grpcAxClient(cfg.axAddr, grpcEgressPolicies(cfg.substrate));
 const controller = new Controller(
-  grpcAxClient(cfg.axAddr, grpcEgressPolicies(cfg.substrate)),
+  provider,
   store.agents,
   cfg.controller,
   console,
@@ -68,15 +79,45 @@ const server = httpServer(
   telemetry,
   store,
   cfg.operatorToken,
-).listen(cfg.port, () => console.log(`folie-server listening on :${cfg.port}`));
+).listen(
+  cfg.port,
+  cfg.executionProfile === "local" ? "127.0.0.1" : undefined,
+  () =>
+    console.log(
+      cfg.executionProfile === "local"
+        ? `folie-server listening on 127.0.0.1:${cfg.port}`
+        : `folie-server listening on :${cfg.port}`,
+    ),
+);
+
+let shuttingDown = false;
+const shutdown = async () => {
+  let exitCode = 0;
+  try {
+    await localProvider?.close();
+  } catch (error) {
+    console.error("local execution shutdown failed:", error);
+    exitCode = 1;
+  }
+  try {
+    await telemetry.shutdown();
+  } catch (error) {
+    console.error("telemetry shutdown failed:", error);
+    exitCode = 1;
+  }
+  try {
+    await db.close();
+  } catch (error) {
+    console.error("database shutdown failed:", error);
+    exitCode = 1;
+  }
+  process.exit(exitCode);
+};
 
 for (const sig of ["SIGTERM", "SIGINT"] as const)
   process.on(sig, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     clearInterval(timer);
-    server.close(() =>
-      telemetry
-        .shutdown()
-        .then(() => db.close())
-        .then(() => process.exit(0)),
-    );
+    server.close(() => void shutdown());
   });

@@ -5,6 +5,8 @@ import {
   ageLabel,
   applyPoll,
   cycleView,
+  failureLines,
+  failureSignals,
   fleetHeader,
   fleetRows,
   formatMessage,
@@ -14,6 +16,7 @@ import {
   pollFailed,
   withStatus,
   select,
+  setView,
   type PollResult,
 } from "../../src/tui/model";
 import type { AgentInfo, Message, Report } from "../../src/shared/types";
@@ -236,6 +239,44 @@ describe("formatting", () => {
     expect(activity(agent("a", { state: "pending" }))).toBe("new");
     expect(activity(agent("a", { state: "suspended" }))).toBe("suspended");
     expect(activity(agent("a", { state: "retired" }))).toBe("retired");
+  });
+
+  it("shows a crashed agent as failed rather than working, until it is retired", () => {
+    expect(activity(agent("a", { unread: 1, failure: "no key" }))).toBe("failed");
+    expect(
+      activity(agent("a", { state: "retired", failure: "no key" })),
+    ).toBe("retired");
+  });
+
+  it("opens the inspector with why the selected agent failed and how to retry", () => {
+    const failed = agent("a", { unread: 1, failure: "process exited with code 1: no key" });
+    const s = setView(
+      select(applyPoll(initialState(), poll({ agents: [failed] })), "a"),
+      "inspector",
+    );
+    expect(paneLines(s).slice(0, 2)).toEqual([
+      "✗ failed: process exited with code 1: no key",
+      "  retry: resume a   (restart Folie first if you changed its config)",
+    ]);
+    expect(failureLines(agent("a"))).toEqual([]);
+    expect(failureLines(undefined)).toEqual([]);
+  });
+
+  it("raises failed agents as execution_lost alerts with a resume intervention", () => {
+    expect(
+      failureSignals([
+        agent("a", { failure: "boom" }),
+        agent("b"),
+        agent("c", { state: "retired", failure: "old" }),
+      ]),
+    ).toEqual([
+      {
+        kind: "execution_lost",
+        agent: "a",
+        detail: "a failed: boom",
+        intervention: "resume a",
+      },
+    ]);
   });
 
   it("lays the fleet out in aligned columns", () => {

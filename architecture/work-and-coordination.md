@@ -1,6 +1,8 @@
 # Goals, tasks, coordination and verification
 
-Status: **target architecture**; nothing here is built (today there are flat work items, [`current-system.md`](current-system.md)). Authority: [`../DESIGN.md`](../DESIGN.md) §8, §9, §14. State machines and schema: [`../spec/domain-model.md`](../spec/domain-model.md). Protocols: [`../spec/protocols.md`](../spec/protocols.md). Decisions: [ADR 0001](../decisions/0001-hybrid-discovery-runtime-claims.md), [ADR 0003](../decisions/0003-completion-states-and-verification.md).
+> **Historical target document:** This page describes the previous design and is retained for migration context. Its requirements and links to the old specs are not current mandates. See the [architecture reset proposal](../docs/architecture/README.md) for the current direction and [as-built snapshot](current-system.md) for implementation notes.
+
+Historical status: target architecture at the time of writing.
 
 ## What the runtime understands about work
 

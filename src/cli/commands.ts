@@ -110,10 +110,13 @@ export async function agents(
 ): Promise<number> {
   const list = await api.agents();
   if (list.length === 0) out("no agents yet");
-  for (const a of list)
+  for (const a of list) {
+    const failed = a.failure !== undefined && a.state !== "retired";
     out(
-      `${a.name.padEnd(24)} ${a.state.padEnd(10)} unread=${a.unread} wakes=${a.wakeEpoch}`,
+      `${a.name.padEnd(24)} ${(failed ? "failed" : a.state).padEnd(10)} unread=${a.unread} wakes=${a.wakeEpoch}` +
+        (failed ? `  reason: ${a.failure} (retry: folie resume ${a.name})` : ""),
     );
+  }
   return 0;
 }
 
@@ -211,3 +214,26 @@ export const pause = (api: Api, args: string[], out: Out) =>
   op(api, args, out, "pause");
 export const resume = (api: Api, args: string[], out: Out) =>
   op(api, args, out, "resume");
+
+export async function artifactGet(
+  api: Pick<FolieClient, "fetchArtifact">,
+  args: string[],
+  out: Out,
+): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { out: { type: "string" } },
+  });
+  const ref = positionals.join(" ").trim();
+  if (!ref) throw new Error('usage: folie artifact <ref> [--out <file>]');
+  const got = await api.fetchArtifact(ref);
+  if (values.out) {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(values.out, got.bytes);
+    out(`wrote ${got.bytes.byteLength} bytes to ${values.out} (${got.ref})`);
+  } else {
+    out(new TextDecoder().decode(got.bytes));
+  }
+  return 0;
+}

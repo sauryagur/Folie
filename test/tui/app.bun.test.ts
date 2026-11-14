@@ -87,6 +87,16 @@ describe.skipIf(!process.versions.bun)("TUI app", () => {
       calls.push(`cancel ${agent} ${reason}`),
       { cursor: 1 }
     ),
+    fetchArtifact: async (ref) => (
+      calls.push(`fetch ${ref}`),
+      {
+        bytes: new Uint8Array([0x61]),
+        mediaType: "text/plain",
+        ref,
+        sha256: "",
+        name: "out.txt",
+      }
+    ),
   };
 
   /** Key handlers start promise chains (poll, command). The fakes resolve at once, so draining and painting is enough. */
@@ -232,7 +242,8 @@ describe.skipIf(!process.versions.bun)("TUI app", () => {
     await app.refresh();
     await settle();
     expect(screen()).toContain("○ offline");
-    expect(screen()).toContain("server unreachable: ECONNREFUSED");
+    // The connection hint replaced the raw error text (840d1b8); the model test pins the full message.
+    expect(screen()).toContain("server unreachable — is folie up?");
     expect(screen()).toContain("agent-1");
 
     failing = false;

@@ -112,6 +112,21 @@ describe("agents", () => {
       wakeEpoch: 2,
     });
   });
+
+  it("records a failure reason on get and list, and clearing it removes the field", async () => {
+    await store.agents.touch("a");
+    await store.agents.setFailure("a", "process exited with code 1: no key");
+    expect(await store.agents.get("a")).toMatchObject({
+      failure: "process exited with code 1: no key",
+    });
+    expect((await store.agents.list())[0]).toMatchObject({
+      failure: "process exited with code 1: no key",
+    });
+
+    await store.agents.setFailure("a", null);
+    expect(await store.agents.get("a")).not.toHaveProperty("failure");
+    expect((await store.agents.list())[0]).not.toHaveProperty("failure");
+  });
 });
 
 describe("idle", () => {

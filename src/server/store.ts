@@ -85,7 +85,11 @@ export interface SessionRepo {
     agent: string,
     clientRequestId: string,
   ): Promise<SessionRecord | null>;
-  settle(id: number, outcome: string): Promise<SessionRecord | null>;
+  settle(
+    id: number,
+    outcome: string,
+    messageIds: number[],
+  ): Promise<SessionRecord | null>;
 }
 export interface TaskRepo {
   propose(b: {
@@ -249,6 +253,8 @@ export interface AgentRepo {
   /** Names in `state` with no unread mail and no activity for at least `seconds`. */
   idle(state: string, seconds: number): Promise<string[]>;
   setState(name: string, state: string): Promise<void>;
+  /** Records why the agent's execution failed, or clears it with null. */
+  setFailure(name: string, reason: string | null): Promise<void>;
   bumpCredentialGeneration(name: string): Promise<void>;
 }
 
@@ -320,6 +326,8 @@ export interface ReportRepo {
     usage?: SessionUsage;
     sessionId?: number;
   }): Promise<Report>;
+  /** Find the report already recorded for a server-owned session, if any. */
+  getBySession(sessionId: number): Promise<Report | null>;
   /** Newest first. */
   list(q: { agent?: string; limit?: number }): Promise<Report[]>;
 }

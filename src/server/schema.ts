@@ -110,6 +110,8 @@ CREATE INDEX IF NOT EXISTS executions_agent ON executions (agent_name, created_a
 -- Credential generations for agents: bumped on revocation/retire/delete/loss.
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS credential_generation int NOT NULL DEFAULT 1;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active';
+-- Why the agent's execution last failed; set by the controller, cleared when it starts again or is retired.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS failure text;
 ALTER TABLE executions ADD COLUMN IF NOT EXISTS epoch int NOT NULL DEFAULT 0;
 ALTER TABLE executions ADD COLUMN IF NOT EXISTS provider_ref jsonb;
 ALTER TABLE executions ADD COLUMN IF NOT EXISTS started_at timestamptz;

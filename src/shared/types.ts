@@ -1,5 +1,13 @@
 // Wire and domain types shared by folie-server, the agent program and the CLI.
 
+export const MAX_ARTIFACT_UPLOAD_BYTES = 32 * 1024 * 1024;
+
+export interface ArtifactUploadResult {
+  sha256: string;
+  ref: string;
+  bytes: number;
+}
+
 export type Outcome = "done" | "failed";
 export type WorkItemState =
   "queued" | "assigned" | "blocked" | "done" | "failed";
@@ -47,6 +55,8 @@ export interface AgentInfo {
   unread: number;
   /** Last mail in or report out; the quiet period that suspension counts from. */
   lastActiveAt: string;
+  /** Why the agent's execution last failed; absent while it is healthy. Retry with an operator `resume`. */
+  failure?: string;
 }
 
 export interface SubmitGoalRequest {
@@ -71,7 +81,8 @@ export type SendResult = Message & { duplicate?: boolean };
 export interface SessionUsage {
   promptTokens: number;
   completionTokens: number;
-  costUsd: number;
+  /** Omit when the selected model provider does not report a reliable price. */
+  costUsd?: number;
   toolCalls: number;
   toolFailures: number;
 }

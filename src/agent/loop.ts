@@ -17,13 +17,14 @@ import type { Runtime, Session, SessionResult } from "./runtime";
 
 export type AgentServer = Pick<
   FolieClient,
-  "inbox" | "report" | "sessionEvents" | "control"
+  "inbox" | "startSession" | "report" | "sessionEvents" | "control"
 >;
 
 export interface LoopDeps {
   tracer?: Tracer;
   /** Where structured log lines go besides the transcript. Defaults to the console. */
   out?: LogSink;
+  /** Creates an idempotency key for the server-owned session creation request. */
   newSessionId?: () => string;
   /** Called after each session settles, so its spans leave the sandbox before it can be suspended. */
   flush?: () => Promise<void>;
@@ -110,12 +111,19 @@ export class AgentLoop {
     return true;
   }
 
-  private runSession(
+  private async runSession(
     batch: Message[],
     scope: string,
     workItemId: number | null,
   ): Promise<void> {
-    const sessionId = this.newSessionId();
+    const clientRequestId = this.newSessionId();
+    const serverSession = await this.server.startSession({
+      agent: this.name,
+      messageIds: batch.map((m) => m.id),
+      clientRequestId,
+      ...(workItemId === null ? {} : { workItemId }),
+    });
+    const sessionId = serverSession.sessionId;
     const consumed = new Set(batch.map((m) => m.id));
     const startedAt = new Date().toISOString();
     const events = new EventSink(
@@ -202,7 +210,9 @@ export class AgentLoop {
           span.setAttributes({
             "llm.usage.prompt_tokens": result.usage.promptTokens,
             "llm.usage.completion_tokens": result.usage.completionTokens,
-            "llm.usage.cost_usd": result.usage.costUsd,
+            ...(result.usage.costUsd === undefined
+              ? {}
+              : { "llm.usage.cost_usd": result.usage.costUsd }),
           });
         }
         span.setAttribute("outcome", result.outcome);
@@ -215,6 +225,7 @@ export class AgentLoop {
 
         const report: SubmitReportRequest = {
           agent: this.name,
+          sessionId,
           startedAt,
           outcome: result.outcome,
           summary: result.summary || "(no summary)",

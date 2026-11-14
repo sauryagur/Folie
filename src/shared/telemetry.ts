@@ -220,7 +220,8 @@ export function createTelemetry(opts: TelemetryOptions): Telemetry {
         type: "completion",
         agent_name: agent,
       });
-      cost.add(usage.costUsd, { agent_name: agent });
+      if (usage.costUsd !== undefined)
+        cost.add(usage.costUsd, { agent_name: agent });
     },
     toolEnded({ agent, tool, replayable, isError }) {
       const attrs = {

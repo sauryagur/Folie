@@ -11,10 +11,13 @@ import {
   type CliRenderer,
 } from "@opentui/core";
 import { HELP, execute, parseCommand, type CommandApi } from "./commands";
+import { writeFile } from "node:fs/promises";
 import {
   fleetHeader as fleetHeaderText,
   VIEWS,
   alertBadge,
+  artifactOutPath,
+  artifactRef,
   buildInspector,
   applyPoll,
   cancelPrompt,
@@ -22,6 +25,7 @@ import {
   cycleView,
   fleetRows,
   initialState,
+  lastArtifact,
   openTrace,
   paneLines,
   paneTitle,
@@ -38,7 +42,9 @@ import type { FolieClient } from "../shared/client";
 import type { SessionEvent } from "../shared/types";
 
 export interface AppDeps {
-  api: PollApi & CommandApi & Partial<Pick<FolieClient, "readEvents">>;
+  api: PollApi &
+    CommandApi &
+    Partial<Pick<FolieClient, "readEvents" | "fetchArtifact">>;
   /** Called when the user quits. The caller owns terminal teardown. */
   onQuit: () => void;
   intervalMs?: number;
@@ -373,6 +379,38 @@ export function createApp(renderer: CliRenderer, deps: AppDeps): App {
             t ? `→ open trace: trace ${t.traceId}` : "? trace_id: none yet",
           );
           draw();
+        }
+        return;
+      case "d":
+        if (state.view === "inspector") {
+          const i = buildInspector(state.selected, state.sessionEvents);
+          const a = lastArtifact(i);
+          const ref = a ? artifactRef(a) : null;
+          if (!ref) {
+            state = withStatus(state, "? artifact: none with a fetchable ref");
+            draw();
+          } else if (typeof deps.api.fetchArtifact !== "function") {
+            state = withStatus(state, "? artifact: fetchArtifact unavailable");
+            draw();
+          } else {
+            void (async () => {
+              try {
+                const got = await deps.api.fetchArtifact!(ref);
+                const dest = artifactOutPath(a!, got.name);
+                await writeFile(dest, got.bytes);
+                state = withStatus(
+                  state,
+                  `✓ wrote ${got.bytes.byteLength} bytes to ${dest} (${got.ref})`,
+                );
+              } catch (e) {
+                state = withStatus(
+                  state,
+                  `artifact: ${e instanceof Error ? e.message : e}`,
+                );
+              }
+              draw();
+            })();
+          }
         }
         return;
       case "s":

@@ -42,6 +42,9 @@ class FakeAgents {
     void this.states.set(name, state);
   touched: string[] = [];
   touch = async (name: string) => void this.touched.push(name);
+  failures = new Map<string, string | null>();
+  setFailure = async (name: string, reason: string | null) =>
+    void this.failures.set(name, reason);
 }
 
 let ax: FakeAx;
@@ -257,6 +260,60 @@ describe("operator ops", () => {
       ValidationError,
     );
     expect(ax.calls).toEqual([]);
+  });
+
+  it("records a failed execution's reason once instead of logging it every pass, and does not retry it", async () => {
+    const lines: string[] = [];
+    const log = {
+      log: (...a: unknown[]) => void lines.push(a.join(" ")),
+      error: (...a: unknown[]) => void lines.push(a.join(" ")),
+    };
+    const ctl = new Controller(ax, agents, cfg, log);
+    await taskIn("a", "Failed");
+    agents.unread = ["a"];
+    await ctl.reconcileOnce();
+    await ctl.reconcileOnce();
+    await ctl.reconcileOnce();
+    expect(ax.calls).toEqual([]);
+    expect(agents.failures.get("a")).toBe("execution failed");
+    const notes = lines.filter((l) => l.includes("folie/a failed"));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/not waking \(retry: folie resume a;/);
+  });
+
+  it("resume restarts a failed execution and clears its recorded failure", async () => {
+    await taskIn("a", "Failed");
+    agents.unread = ["a"];
+    await controller.reconcileOnce();
+    expect(agents.failures.get("a")).toBe("execution failed");
+
+    expect(await controller.run("resume", "a")).toEqual({
+      agent: "a",
+      state: "running",
+    });
+    expect(ax.calls).toEqual(["egress folie/a", "resume a"]);
+    expect(ax.tasks.get("folie/a")?.phase).toBe("Running");
+    expect(agents.failures.get("a")).toBeNull();
+    expect(agents.states.get("a")).toBe("running");
+  });
+
+  it("resume says why a failed execution could not be restarted", async () => {
+    await taskIn("a", "Failed");
+    ax.start = async () => {
+      throw new Error("ResumeTask: task is Failed");
+    };
+    await expect(controller.run("resume", "a")).rejects.toThrow(
+      /a could not be restarted: execution failed/,
+    );
+  });
+
+  it("clears a recorded failure when a dead quiet agent is retired", async () => {
+    await taskIn("a", "Failed");
+    agents.failures.set("a", "boom");
+    agents.idleByState.set("running", ["a"]);
+    await controller.reconcileOnce();
+    expect(agents.states.get("a")).toBe("retired");
+    expect(agents.failures.get("a")).toBeNull();
   });
 
   it("resume restarts the quiet period, grants egress and resumes, even with no mail", async () => {

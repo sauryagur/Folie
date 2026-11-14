@@ -1,6 +1,8 @@
 # Domain model and durable state
 
-Status: **target specification** (nothing here is built unless marked "today"). Authority: [`../DESIGN.md`](../DESIGN.md). Protocols that act on this model: [`protocols.md`](protocols.md). Contracts the model is accessed through: [`interfaces.md`](interfaces.md). Current schema: [`../architecture/current-system.md`](../architecture/current-system.md#data-model).
+> **Historical target specification:** This page records the previous design and is retained for migration context. Its state model and references are not current mandates. See the [architecture reset proposal](../docs/architecture/README.md) and [as-built snapshot](../architecture/current-system.md).
+
+Historical status: target specification for the previous design.
 
 ## 1. Conventions
 

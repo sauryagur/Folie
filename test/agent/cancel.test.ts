@@ -4,6 +4,8 @@ import type { Runtime, SessionResult } from "../../src/agent/runtime";
 import type {
   Message,
   SessionEventBatch,
+  SessionSummary,
+  StartSessionRequest,
   SessionUsage,
   SubmitReportRequest,
 } from "../../src/shared/types";
@@ -24,8 +26,16 @@ const msg = (id: number, workItemId: number): Message => ({
 
 class FakeServer implements AgentServer {
   reports: SubmitReportRequest[] = [];
+  private nextSessionId = 1;
   constructor(public mail: Message[]) {}
   inbox = async () => this.mail;
+  startSession = async (r: StartSessionRequest): Promise<SessionSummary> => ({
+    sessionId: String(this.nextSessionId++),
+    agent: r.agent,
+    state: "running",
+    workItemId: r.workItemId ?? null,
+    startedAt: "",
+  });
   sessionEvents = async (_b: SessionEventBatch) => ({ stored: 0 });
   report = async (r: SubmitReportRequest) => {
     this.reports.push(r);

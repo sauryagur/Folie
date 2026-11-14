@@ -1,6 +1,8 @@
 # Requirements
 
-Status: **normative**. This is the specification Folie must meet. Architecture and protocols explain _how_; where they disagree with this file, this file wins.
+> **Historical specification:** The reset proposal in [`../docs/architecture/README.md`](../docs/architecture/README.md) is under review. This file describes the previous target and is retained for audit and migration context; its MUST/SHOULD statements are not current implementation requirements until the replacement specification is approved.
+
+Historical status: this specification was normative for the previous design. Its conformance rules below document that design only.
 
 **Conformance.** `MUST`/`MUST NOT` are required, each verified by a named automated test unless marked _(live)_, which requires a recorded run against real ax, Substrate and a model provider. `SHOULD` is required unless a deviation is recorded with its reason in `decisions/`. `MAY` is optional. **The specification is met when every MUST has a passing conformance test, every live requirement has a recorded run, and demonstrations E1–E6 ([§2](#2-demonstrations)) pass.** There is no staging: all MUSTs are required of one system.
 

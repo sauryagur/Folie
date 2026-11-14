@@ -1,12 +1,13 @@
 // One refresh of everything the TUI shows. The active view decides which extra reads are worth making.
 import type { FolieClient } from "../shared/client";
 import type { LedgerEvent } from "../shared/types";
-import type {
-  AlertKind,
-  AlertSignal,
-  BudgetNodeInput,
-  PollResult,
-  TuiState,
+import {
+  failureSignals,
+  type AlertKind,
+  type AlertSignal,
+  type BudgetNodeInput,
+  type PollResult,
+  type TuiState,
 } from "./model";
 
 export type PollApi = Pick<
@@ -89,7 +90,9 @@ export async function poll(api: PollApi, s: TuiState): Promise<PollResult> {
     topics,
     inbox,
     reports: reports?.slice().reverse(),
-    alertSignals: needBudgets ? [...fromLedger, ...fromBudgets] : undefined,
+    alertSignals: needBudgets
+      ? [...failureSignals(agents), ...fromLedger, ...fromBudgets]
+      : undefined,
     budgets: needBudgets ? budgetInputs : undefined,
     forAgent: s.selected,
   };

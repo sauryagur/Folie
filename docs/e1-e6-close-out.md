@@ -1,5 +1,7 @@
 # E1–E6 close-out design note
 
+> **Historical design note:** E1–E6 are demonstrations from the previous architecture target. Their gaps and ordering are not an active implementation backlog. The current proposal and validation direction are in [`architecture/README.md`](architecture/README.md).
+
 Status: **not met**. No live run (real ax + Substrate + model provider) has been recorded for any of E1–E6. This note records what a live run would count as, what code must exist before it, and the gaps that block it. Do not quote this as passing.
 
 ## What E1–E6 require (spec/requirements.md §2)

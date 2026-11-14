@@ -1,6 +1,8 @@
 # Governance, safety, scheduling and resources
 
-Status: **target architecture**; today Folie has no authorization, no budgets and full-trust egress by decision ([`current-system.md`](current-system.md#trust-and-credentials), D1, D2, D11). Authority: [`../DESIGN.md`](../DESIGN.md) §13, §15. Protocols: [`../spec/protocols.md`](../spec/protocols.md) §1, §11–§13, §15–§16. Decisions: [ADR 0005](../decisions/0005-authenticated-principals.md), [ADR 0007](../decisions/0007-gateway-credentials-budgets.md).
+> **Historical target document:** This page describes the previous design and is retained for migration context. Its requirements and links to the old specs are not current mandates. See the [architecture reset proposal](../docs/architecture/README.md) for the current direction and [as-built snapshot](current-system.md) for implementation notes.
+
+Historical status: target architecture at the time of writing.
 
 Principle: **a model's output is a request, never an authorization.** Nothing an agent says, reasons or is prompted to do changes what it is allowed to do. Authority comes from grants held by authenticated principals, evaluated by deterministic code outside the sandbox.
 

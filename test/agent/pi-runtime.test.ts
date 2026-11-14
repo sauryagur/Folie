@@ -11,7 +11,6 @@ import {
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PiRuntime, type SwarmServer } from "../../src/agent/runtimes/pi";
 import type {
@@ -104,6 +103,11 @@ function runtime(overrides: Partial<SwarmServer> = {}) {
     ),
     attempts: async () => earlier,
     ...overrides,
+    uploadArtifact: overrides.uploadArtifact ?? (async (bytes) => ({
+      sha256: "0".repeat(64),
+      ref: "artifact:sha256:" + "0".repeat(64),
+      bytes: bytes.byteLength,
+    })),
   };
   return new PiRuntime({
     agentName: "a",
@@ -258,7 +262,8 @@ describe("bounded sessions", () => {
     expect(artifact!.data).toEqual({
       path: "out/proof.txt",
       bytes: 3,
-      sha256: createHash("sha256").update("QED").digest("hex"),
+      sha256: "0".repeat(64),
+      ref: "artifact:sha256:" + "0".repeat(64),
       description: "the proof",
     });
   });
