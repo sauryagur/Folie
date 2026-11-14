@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
 import { chmod, mkdir, realpath, rm } from "node:fs/promises";
 import type {
   ExecutionCapabilities,
@@ -76,6 +77,22 @@ function signalProcess(child: ChildProcess, signal: NodeJS.Signals): void {
     )
       return;
     throw error;
+  }
+}
+
+/**
+ * Where an agent records its own fatal error before exiting (FOLIE_FATAL_FILE, see src/agent/main.ts): beside its
+ * workspace, not in it, so the agent's tools never see it. Read back as the failure reason on a non-zero exit.
+ */
+const fatalFileOf = (workspacePath: string) => `${workspacePath}.fatal`;
+
+/** The agent's fatal error as one bounded line, or "" when it left none. */
+function fatalReason(file: string): string {
+  try {
+    const text = readFileSync(file, "utf8").replace(/\s+/g, " ").trim();
+    return text ? `: ${text.slice(0, 500)}` : "";
+  } catch {
+    return "";
   }
 }
 
@@ -200,6 +217,9 @@ export class LocalProcessProvider implements ExecutionProvider {
     await chmod(execution.workspacePath, 0o700);
     const [command, ...args] = execution.spec.command;
     if (!command) throw new Error("local process provider requires a command");
+    // A reason left by an earlier run must not be reported for this one.
+    const fatalFile = fatalFileOf(execution.workspacePath);
+    await rm(fatalFile, { force: true });
     const child = spawn(command, args, {
       cwd: execution.workspacePath,
       // Do not inherit server credentials (operator token, database paths, etc.).
@@ -211,6 +231,7 @@ export class LocalProcessProvider implements ExecutionProvider {
         ...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
         ...execution.spec.env,
         FOLIE_WORKDIR: execution.workspacePath,
+        FOLIE_FATAL_FILE: fatalFile,
       },
       stdio: "inherit",
       detached: process.platform !== "win32",
@@ -242,7 +263,7 @@ export class LocalProcessProvider implements ExecutionProvider {
         this.executions.delete(keyOf(ref));
       } else {
         execution.phase = "failed";
-        execution.detail = `process exited with ${signal ? `signal ${signal}` : `code ${code}`}`;
+        execution.detail = `process exited with ${signal ? `signal ${signal}` : `code ${code}`}${fatalReason(fatalFile)}`;
       }
     });
 
@@ -302,6 +323,7 @@ export class LocalProcessProvider implements ExecutionProvider {
     if (options.destroyWorkspace) {
       await this.assertWorkspaceContained(execution.workspacePath);
       await rm(execution.workspacePath, { recursive: true, force: true });
+      await rm(fatalFileOf(execution.workspacePath), { force: true });
     }
   }
 

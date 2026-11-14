@@ -35,7 +35,7 @@ export interface ControllerConfig {
 
 export type ControllerAgents = Pick<
   AgentRepo,
-  "wakeDemand" | "retrace" | "idle" | "setState" | "touch"
+  "wakeDemand" | "retrace" | "idle" | "setState" | "touch" | "setFailure"
 >;
 export type ControllerAuth = Pick<
   AuthRepo,
@@ -51,6 +51,9 @@ export type ControllerRegistry = Pick<
 >;
 
 export class Controller implements AgentOps {
+  /** Why each agent was last left unwoken, so the reason is logged and recorded once, not every pass. */
+  private readonly notWaking = new Map<string, string>();
+
   constructor(
     private readonly provider: ExecutionProvider,
     private readonly agents: ControllerAgents,
@@ -116,6 +119,7 @@ export class Controller implements AgentOps {
       const st = await this.inspectAgent(name);
       if (st) await this.provider.terminate(ref, { destroyWorkspace: true });
       await this.agents.setState(name, "retired");
+      await this.clearFailure(name);
       // Revoke execution token(s); agent identity remains but stale tokens must fail.
       if (this.auth)
         await this.auth.revokeAgentTokens(name).catch(() => undefined);
@@ -132,8 +136,44 @@ export class Controller implements AgentOps {
     }
     // resume: restart the quiet period first, or the idle sweep would suspend the agent again on the next pass.
     await this.agents.touch(name);
-    await this.wake(name);
+    // An explicit resume is the operator's retry of a failed execution; the reconcile loop never retries one itself.
+    const before = await this.inspectAgent(name);
+    await this.wake(name, undefined, undefined, { retryFailed: true });
+    if (before?.phase === "failed") {
+      const after = await this.inspectAgent(name);
+      if (after?.phase === "failed")
+        throw new ValidationError(
+          `${name} could not be restarted: ${after.detail ?? "execution failed"}`,
+        );
+    }
     return { agent: name, state: "running" };
+  }
+
+  /**
+   * Records once why an agent with unread mail is left unwoken, instead of logging it every pass. A failure is
+   * stored on the agent so operators see it (`folie agents`, the TUI) rather than an agent that looks busy.
+   */
+  private async noteNotWaking(name: string, st: ExecutionState): Promise<void> {
+    const failed = st.phase === "failed";
+    const reason = failed
+      ? `failed: ${st.detail ?? "execution failed"}`
+      : `is ${st.phase}`;
+    if (this.notWaking.get(name) === reason) return;
+    this.log.log(
+      `controller: ${this.cfg.namespace}/${name} ${reason}; not waking` +
+        (failed
+          ? ` (retry: folie resume ${name}; restart Folie first if you changed its config)`
+          : ""),
+    );
+    if (failed)
+      await this.agents.setFailure(name, st.detail ?? "execution failed");
+    // Remember only once recorded, so a failed write is retried (and logged) on the next pass.
+    this.notWaking.set(name, reason);
+  }
+
+  private async clearFailure(name: string): Promise<void> {
+    this.notWaking.delete(name);
+    await this.agents.setFailure(name, null);
   }
 
   private refOf(key: string): ProviderRef {
@@ -161,14 +201,24 @@ export class Controller implements AgentOps {
     name: string,
     cause?: { traceparent: string | null; tracestate: string | null },
     snapshot?: Map<string, ExecutionState>,
+    opts: { retryFailed?: boolean } = {},
   ): Promise<void> {
     const st = snapshot?.get(name) ?? (await this.inspectAgent(name));
-    if (st?.phase === "running") return;
-    if (st && st.phase !== "suspended" && st.phase !== "provisioning") {
-      // failed/unknown/transitional executions: leave visible rather than guess. Only the idle sweep deletes dead ones.
-      this.log.log(
-        `controller: ${this.cfg.namespace}/${name} is ${st.phase}; not waking`,
-      );
+    if (st?.phase === "running") {
+      // Running again by some other path (e.g. the provider restarted it): a recorded failure is stale.
+      if (this.notWaking.has(name)) await this.clearFailure(name);
+      return;
+    }
+    const retrying = opts.retryFailed === true && st?.phase === "failed";
+    if (
+      st &&
+      st.phase !== "suspended" &&
+      st.phase !== "provisioning" &&
+      !retrying
+    ) {
+      // failed/unknown/transitional executions: leave visible rather than guess. Only the idle sweep deletes dead
+      // ones, and only an operator resume retries a failed one.
+      await this.noteNotWaking(name, st);
       return;
     }
     const parent = cause ? contextFrom(cause) : undefined;
@@ -235,6 +285,7 @@ export class Controller implements AgentOps {
             try {
               await this.provider.start(ref);
               await this.agents.setState(name, "running");
+              await this.clearFailure(name);
               if (this.registry && executionId)
                 await this.registry
                   .setState(executionId, "running")
@@ -311,6 +362,7 @@ export class Controller implements AgentOps {
       });
     }
     await this.agents.setState(name, "retired");
+    await this.clearFailure(name);
     if (this.auth)
       await this.auth.revokeAgentTokens(name).catch(() => undefined);
   }

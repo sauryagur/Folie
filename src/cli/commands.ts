@@ -110,10 +110,13 @@ export async function agents(
 ): Promise<number> {
   const list = await api.agents();
   if (list.length === 0) out("no agents yet");
-  for (const a of list)
+  for (const a of list) {
+    const failed = a.failure !== undefined && a.state !== "retired";
     out(
-      `${a.name.padEnd(24)} ${a.state.padEnd(10)} unread=${a.unread} wakes=${a.wakeEpoch}`,
+      `${a.name.padEnd(24)} ${(failed ? "failed" : a.state).padEnd(10)} unread=${a.unread} wakes=${a.wakeEpoch}` +
+        (failed ? `  reason: ${a.failure} (retry: folie resume ${a.name})` : ""),
     );
+  }
   return 0;
 }
 

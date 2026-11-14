@@ -169,4 +169,27 @@ describe("poll", () => {
     expect(r.alertSignals![1]!.kind).toBe("budget_exhausted");
     expect(r.budgets).toHaveLength(1);
   });
+
+  it("lists a failed agent among the alerts", async () => {
+    const { api } = fakeApi();
+    api.agents = async () => [
+      {
+        name: "a",
+        state: "running",
+        wakeEpoch: 1,
+        unread: 1,
+        lastActiveAt: "2026-11-04T12:00:00Z",
+        failure: "process exited with code 1: no key",
+      },
+    ];
+    const r = await poll(api, setView(withAgent(initialState()), "alerts"));
+    expect(r.alertSignals).toEqual([
+      {
+        kind: "execution_lost",
+        agent: "a",
+        detail: "a failed: process exited with code 1: no key",
+        intervention: "resume a",
+      },
+    ]);
+  });
 });

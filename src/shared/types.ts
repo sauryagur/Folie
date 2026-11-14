@@ -55,6 +55,8 @@ export interface AgentInfo {
   unread: number;
   /** Last mail in or report out; the quiet period that suspension counts from. */
   lastActiveAt: string;
+  /** Why the agent's execution last failed; absent while it is healthy. Retry with an operator `resume`. */
+  failure?: string;
 }
 
 export interface SubmitGoalRequest {

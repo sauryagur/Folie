@@ -423,6 +423,8 @@ export function ageLabel(iso: string, now: number): string {
 
 /** What the agent is doing right now, from its recorded state and mailbox. */
 export function activity(a: AgentInfo): string {
+  // A crashed execution leaves the agent "running" with unread mail; without this it would read "working".
+  if (a.failure && a.state !== "retired") return "failed";
   if (a.state === "running") return a.unread > 0 ? "working" : "idle";
   if (a.state === "pending") return a.unread > 0 ? "waking" : "new";
   return a.state; // suspended, retired
@@ -913,6 +915,26 @@ export function inspectorLines(i: InspectorModel): string[] {
   return lines;
 }
 
+/** Why the selected agent failed and how to retry; nothing for a healthy or retired agent. */
+export function failureLines(a: AgentInfo | undefined): string[] {
+  if (!a?.failure || a.state === "retired") return [];
+  return [
+    `✗ failed: ${a.failure}`,
+    `  retry: resume ${a.name}   (restart Folie first if you changed its config)`,
+  ];
+}
+
+/** Failed agents as alert signals, so they also appear in the alerts view. */
+export const failureSignals = (agents: AgentInfo[]): AlertSignal[] =>
+  agents
+    .filter((a) => a.failure && a.state !== "retired")
+    .map((a) => ({
+      kind: "execution_lost" as AlertKind,
+      agent: a.name,
+      detail: `${a.name} failed: ${a.failure}`,
+      intervention: `resume ${a.name}`,
+    }));
+
 /** The body of the right-hand pane for the active view. */
 export function paneLines(s: TuiState): string[] {
   const who = s.selected ?? "(no agent)";
@@ -934,7 +956,10 @@ export function paneLines(s: TuiState): string[] {
         ? s.topics.map(formatTopic)
         : ["No topics yet. Try: subscribe <topic> [agent]"];
     case "inspector":
-      return inspectorLines(buildInspector(s.selected, s.sessionEvents));
+      return [
+        ...failureLines(s.agents.find((a) => a.name === s.selected)),
+        ...inspectorLines(buildInspector(s.selected, s.sessionEvents)),
+      ];
     case "alerts":
       return alertsLines(buildAlerts(s.alertSignals));
     case "budgets":

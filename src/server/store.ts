@@ -253,6 +253,8 @@ export interface AgentRepo {
   /** Names in `state` with no unread mail and no activity for at least `seconds`. */
   idle(state: string, seconds: number): Promise<string[]>;
   setState(name: string, state: string): Promise<void>;
+  /** Records why the agent's execution failed, or clears it with null. */
+  setFailure(name: string, reason: string | null): Promise<void>;
   bumpCredentialGeneration(name: string): Promise<void>;
 }
 

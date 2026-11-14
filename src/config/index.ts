@@ -56,9 +56,89 @@ function generateOperatorToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
-function maskSecret(value: string): string {
+export function maskSecret(value: string): string {
   if (!value) return "";
   return value.length > 4 ? `${value.slice(0, 2)}${'*'.repeat(value.length - 4)}${value.slice(-2)}` : '****';
+}
+
+/** Fields `folie config set` may change. `config_version` is managed by Folie; edit `agent_env` with `folie config edit`. */
+export const SETTABLE_KEYS = [
+  "execution_profile",
+  "kubeconfig_context",
+  "operator_token",
+  "agent_image",
+  "default_model",
+  "model_api_key",
+  "atespace",
+  "agent_runtime",
+  "server_port",
+  "reconcile_ms",
+] as const;
+
+/** Every field a config file may hold. */
+export const CONFIG_KEYS: readonly string[] = [
+  "config_version",
+  ...SETTABLE_KEYS,
+  "agent_env",
+];
+
+/** Fields whose values are never printed unless explicitly revealed. */
+export const SECRET_KEYS: ReadonlySet<string> = new Set([
+  "operator_token",
+  "model_api_key",
+]);
+
+const NUMERIC_KEYS: ReadonlySet<string> = new Set(["server_port", "reconcile_ms"]);
+
+/**
+ * Returns the config with one field changed, or why the change is refused. Refuses unknown or read-only
+ * keys, empty values, non-numeric numbers, and changes that introduce a validation error the config did not
+ * already have (so a multi-step setup is not blocked by errors it has yet to fix).
+ */
+export function setConfigValue(
+  config: FolieConfig,
+  key: string,
+  raw: string,
+): { config: FolieConfig } | { error: string } {
+  if (!(SETTABLE_KEYS as readonly string[]).includes(key))
+    return {
+      error: `unknown or read-only key: ${key} (settable: ${SETTABLE_KEYS.join(", ")})`,
+    };
+  const value = raw.trim();
+  if (!value) return { error: `${key}: value must not be empty` };
+  let parsed: string | number = value;
+  if (NUMERIC_KEYS.has(key)) {
+    if (!/^\d+$/.test(value)) return { error: `${key}: whole number required` };
+    parsed = Number(value);
+  }
+  const next = { ...config, [key]: parsed } as FolieConfig;
+  const existing = new Set(validateConfig(config));
+  const introduced = validateConfig(next).filter((e) => !existing.has(e));
+  if (introduced.length > 0) return { error: introduced.join(", ") };
+  return { config: next };
+}
+
+/** One config value as printed to a terminal: secrets and agent_env values masked. */
+export function displayConfigValue(key: string, value: unknown): string {
+  if (value === undefined || value === null || value === "") return "(not set)";
+  if (key === "agent_env") {
+    const entries = value as AgentEnvEntry[];
+    return entries.length > 0
+      ? entries.map((e) => `${e.key}=${maskSecret(e.value)}`).join(", ")
+      : "(empty)";
+  }
+  if (SECRET_KEYS.has(key)) return maskSecret(String(value));
+  return String(value);
+}
+
+/** Older field names loadConfig still accepts (`namespace` became `atespace`). */
+const LEGACY_KEYS: readonly string[] = ["namespace"];
+
+/** Fields in a loaded config that Folie does not know (for example a stray field written by a buggy tool). */
+export function unknownConfigKeys(config: object): string[] {
+  return Object.keys(config).filter(
+    (k) => !CONFIG_KEYS.includes(k) && !LEGACY_KEYS.includes(k),
+  );
 }
 
 export function loadConfig(): FolieConfig | null {
@@ -150,10 +230,12 @@ export function getEffectiveConfig(): FolieConfig {
   if (env.FOLIE_SERVER_PORT) result.server_port = parseInt(env.FOLIE_SERVER_PORT, 10);
   if (env.FOLIE_RECONCILE_MS) result.reconcile_ms = parseInt(env.FOLIE_RECONCILE_MS, 10);
 
-  // Environment overrides configured entries with the same key and preserves the rest.
+  // Environment overrides configured entries with the same key and preserves the rest. An empty value (such as
+  // the blank `FOLIE_AGENT_ENV_OPENROUTER_API_KEY=` line install.sh writes to .env, which Bun auto-loads) is
+  // treated as unset: it must never blank out a configured value such as model_api_key.
   const agentEnv = new Map(result.agent_env.map((entry) => [entry.key, entry.value]));
   for (const [name, value] of Object.entries(env)) {
-    if (!name.startsWith("FOLIE_AGENT_ENV_") || value === undefined) continue;
+    if (!name.startsWith("FOLIE_AGENT_ENV_") || !value) continue;
     agentEnv.set(name.slice("FOLIE_AGENT_ENV_".length), value);
   }
   result.agent_env = [...agentEnv].map(([key, value]) => ({ key, value }));
@@ -201,6 +283,28 @@ export function validateConfig(config: FolieConfig): string[] {
   if (config.server_port < 1 || config.server_port > 65535) errors.push("server_port must be 1-65535");
   if (config.reconcile_ms < 100) errors.push("reconcile_ms must be >= 100");
 
+  return errors;
+}
+
+/**
+ * Problems that would make every agent crash at startup, checked before `folie up` reports ready. The Strands
+ * runtime reaches models only through OpenRouter and reads OPENROUTER_API_KEY, which comes from model_api_key
+ * or an OPENROUTER_API_KEY agent_env entry. The scripted test model (FOLIE_FAKE_TURNS) needs neither.
+ */
+export function runtimeReadinessErrors(config: FolieConfig): string[] {
+  if (config.agent_runtime !== "strands") return [];
+  const agentEnv = (key: string) =>
+    config.agent_env.find((e) => e.key === key)?.value ?? "";
+  if (agentEnv("FOLIE_FAKE_TURNS")) return [];
+  const errors: string[] = [];
+  if (!/^openrouter\/.+/.test(config.default_model))
+    errors.push(
+      `agent_runtime strands needs default_model "openrouter/<model id>", got ${JSON.stringify(config.default_model)}`,
+    );
+  if (!config.model_api_key && !agentEnv("OPENROUTER_API_KEY"))
+    errors.push(
+      "model_api_key is empty: agents would crash on start. Set an OpenRouter key with `folie config set model_api_key <key>`, or use agent_runtime echo",
+    );
   return errors;
 }
 

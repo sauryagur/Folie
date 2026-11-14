@@ -23,6 +23,7 @@ import {
   createDefaultConfig,
   getEffectiveConfig,
   loadConfig,
+  runtimeReadinessErrors,
   saveConfig,
   validateConfig,
   type ExecutionProfile,
@@ -74,6 +75,10 @@ const up: Command = async (args) => {
   };
   const errors = validateConfig(selected);
   if (errors.length > 0) throw new Error(`invalid config: ${errors.join(", ")}`);
+  // Refuse before starting anything: otherwise `up` reports ready and every agent crashes on its first goal.
+  const notReady = runtimeReadinessErrors(selected);
+  if (notReady.length > 0)
+    throw new Error(`agents cannot start: ${notReady.join("; ")}`);
 
   // An explicit profile becomes the default for later `up`/`down` commands.
   if (requested) {
@@ -115,6 +120,15 @@ const commands: Record<string, Command> = {
   config: (args) => config(undefined as unknown as Api, args, console.log),
   submit: viaServer(submit),
   status: viaServer(status),
+  // Operator commands dropped from this table by the config wizard change; their implementations never left.
+  agents: viaServer(agents),
+  topics: viaServer(topics),
+  subscribe: viaServer(subscribe),
+  unsubscribe: viaServer(unsubscribe),
+  publish: viaServer(publish),
+  cancel: viaServer(cancel),
+  pause: viaServer(pause),
+  resume: viaServer(resume),
   artifact: (args) =>
     withServerUrl((url) => artifactGet(operatorClient(url), args, console.log)),
 };

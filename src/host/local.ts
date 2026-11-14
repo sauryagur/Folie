@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, openSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { FolieConfig } from "../config";
 import { HOME, REPO } from "./env";
@@ -35,7 +35,81 @@ const paths = (): LocalPaths => {
   };
 };
 
+/** Marks identities built from /proc, so records written in the older `ps` format can be recognized. */
+export const LINUX_IDENTITY_PREFIX = "linux:";
+
+/** Fields 3 onward of /proc/<pid>/stat. The command name (field 2) is parenthesized and may itself contain
+ *  spaces or ")", so fields are counted from the last ")". */
+function procFieldsAfterComm(stat: string): string[] | null {
+  const close = stat.lastIndexOf(")");
+  return close < 0 ? null : stat.slice(close + 1).trim().split(/\s+/);
+}
+
+/** The process start time in clock ticks since boot: field 22 of /proc/<pid>/stat. */
+export function procStartTicks(stat: string): string | null {
+  const ticks = procFieldsAfterComm(stat)?.[19]; // index 0 is field 3, so field 22 is index 19
+  return ticks !== undefined && /^\d+$/.test(ticks) ? ticks : null;
+}
+
+/** A zombie (Z) or dead (X) process has exited; it only awaits reaping, with an empty command line. */
+export function procExited(stat: string): boolean {
+  const state = procFieldsAfterComm(stat)?.[0];
+  return state === "Z" || state === "X" || state === "x";
+}
+
+/**
+ * Linux identity from /proc: boot id, start ticks and command line. Unlike the wall-clock start time `ps`
+ * prints, none of these move when the system clock is stepped (WSL re-syncs with Windows, VMs resume).
+ * Returns null when the process does not exist, and undefined when /proc cannot answer (use `ps` instead).
+ */
+export function linuxProcessIdentity(
+  pid: number,
+  read: (path: string) => string = (path) => readFileSync(path, "utf8"),
+): string | null | undefined {
+  let bootId: string;
+  try {
+    bootId = read("/proc/sys/kernel/random/boot_id").trim();
+  } catch {
+    return undefined;
+  }
+  let stat: string;
+  let cmdline: string;
+  try {
+    stat = read(`/proc/${pid}/stat`);
+    cmdline = read(`/proc/${pid}/cmdline`);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : undefined;
+  }
+  // An exited process awaiting reaping (e.g. while `folie down` waits for shutdown) is gone, not a stranger.
+  if (procExited(stat)) return null;
+  const ticks = procStartTicks(stat);
+  if (!bootId || !ticks) return undefined;
+  const command = cmdline.split("\0").filter(Boolean).join(" ");
+  return `${LINUX_IDENTITY_PREFIX}${bootId}:${ticks} ${command}`;
+}
+
+/**
+ * Whether a recorded identity still names the same process. Records written before /proc identities hold
+ * `ps`'s wall-clock start time, which drifts with the clock; accept those when the command line matches,
+ * so an upgrade does not lock out a server that is already running.
+ */
+export function sameProcess(recorded: string, actual: string): boolean {
+  if (recorded === actual) return true;
+  if (
+    !recorded.startsWith(LINUX_IDENTITY_PREFIX) &&
+    actual.startsWith(LINUX_IDENTITY_PREFIX)
+  ) {
+    const command = actual.slice(actual.indexOf(" ") + 1);
+    return command.length > 0 && recorded.endsWith(` ${command}`);
+  }
+  return false;
+}
+
 function processIdentity(pid: number): string | null {
+  if (process.platform === "linux") {
+    const linux = linuxProcessIdentity(pid);
+    if (linux !== undefined) return linux;
+  }
   if (process.platform === "win32") {
     const script =
       `$p=Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'; ` +
@@ -63,6 +137,14 @@ function isFolieServerIdentity(identity: string, serverEntry: string): boolean {
 }
 
 function processExists(pid: number): boolean {
+  // kill(pid, 0) succeeds for a zombie; on Linux, /proc says whether the process has actually exited.
+  if (process.platform === "linux") {
+    try {
+      if (procExited(readFileSync(`/proc/${pid}/stat`, "utf8"))) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    }
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -111,7 +193,7 @@ function assertOwnedProcess(record: LocalServerRecord): string | null {
   if (
     record.serverEntry !== SERVER_ENTRY ||
     !isFolieServerIdentity(actual, record.serverEntry) ||
-    actual !== record.processIdentity
+    !sameProcess(record.processIdentity, actual)
   )
     throw new Error(
       `PID file ${paths().pidFile} no longer identifies the Folie server; refusing to signal PID ${record.pid}`,

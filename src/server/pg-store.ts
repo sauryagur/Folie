@@ -267,6 +267,17 @@ const workItems = (q: Queryable): WorkItemRepo => ({
   },
 });
 
+const AGENT_INFO_COLS = `a.name, a.state, a.wake_epoch, a.last_active_at, a.failure, count(m.id)::int AS unread`;
+
+const toAgentInfo = (r: Row): AgentInfo => ({
+  name: r.name as string,
+  state: r.state as string,
+  wakeEpoch: r.wake_epoch as number,
+  unread: r.unread as number,
+  lastActiveAt: iso(r.last_active_at),
+  ...(typeof r.failure === "string" && r.failure ? { failure: r.failure } : {}),
+});
+
 const agents = (q: Queryable): AgentRepo => ({
   async touch(name) {
     await q.query(
@@ -286,20 +297,12 @@ const agents = (q: Queryable): AgentRepo => ({
   },
   async get(name) {
     const { rows } = await q.query(
-      `SELECT a.name, a.state, a.wake_epoch, a.last_active_at, count(m.id)::int AS unread
+      `SELECT ${AGENT_INFO_COLS}
        FROM agents a LEFT JOIN messages m ON m.recipient = a.name AND m.acked_at IS NULL
        WHERE a.name = $1 GROUP BY a.name`,
       [name],
     );
-    if (!rows[0]) return null;
-    const r = rows[0]!;
-    return {
-      name: r.name as string,
-      state: r.state as string,
-      wakeEpoch: r.wake_epoch as number,
-      unread: r.unread as number,
-      lastActiveAt: iso(r.last_active_at),
-    };
+    return rows[0] ? toAgentInfo(rows[0]) : null;
   },
   async find(name) {
     return this.get(name);
@@ -318,17 +321,11 @@ const agents = (q: Queryable): AgentRepo => ({
   },
   async list() {
     const { rows } = await q.query(
-      `SELECT a.name, a.state, a.wake_epoch, a.last_active_at, count(m.id)::int AS unread
+      `SELECT ${AGENT_INFO_COLS}
        FROM agents a LEFT JOIN messages m ON m.recipient = a.name AND m.acked_at IS NULL
        GROUP BY a.name ORDER BY a.name`,
     );
-    return rows.map((r): AgentInfo => ({
-      name: r.name as string,
-      state: r.state as string,
-      wakeEpoch: r.wake_epoch as number,
-      unread: r.unread as number,
-      lastActiveAt: iso(r.last_active_at),
-    }));
+    return rows.map(toAgentInfo);
   },
   async wakeDemand() {
     const { rows } = await q.query(
@@ -357,6 +354,12 @@ const agents = (q: Queryable): AgentRepo => ({
       "UPDATE agents SET wake_epoch = wake_epoch + (state <> 'running' AND $2 = 'running')::int, state = $2 WHERE name = $1",
       [name, state],
     );
+  },
+  async setFailure(name, reason) {
+    await q.query("UPDATE agents SET failure = $2 WHERE name = $1", [
+      name,
+      reason,
+    ]);
   },
 });
 
